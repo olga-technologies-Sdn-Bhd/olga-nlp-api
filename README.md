@@ -56,7 +56,7 @@ curl.exe -X POST http://localhost:5000/v1/match-requests `
 
 Normalization is synchronous. The intent row commits original text, PII-minimized normalized text, normalized hash, language, PII signal, preprocessing version, and `PROCESSING` status together.
 
-Development uses `EmbeddingProcessing:Mode=Inline`. Production uses `Queued`, which writes `nlp.NlpProcessingJob`; the worker embeds the stored normalized text, applies bounded retries and a lease, and marks the intent `MATCH_READY`. Normal searches reuse stored vectors and never call the embedding provider.
+Local development uses the deterministic 1,536-dimensional fake provider with `EmbeddingProcessing:Mode=Inline`. Deployed environments use Azure OpenAI with managed identity and `Queued`, which writes `nlp.NlpProcessingJob`; the worker embeds the stored normalized text, applies bounded retries and a lease, and marks the intent `MATCH_READY`. Normal searches reuse stored vectors and never call the embedding provider.
 
 All WANT and OFFER vectors in a comparison must use the same active model version and 1,536 dimensions. Candidate retrieval is bounded to at most 200 eligible candidates before .NET ranking. PostgreSQL persists embeddings as native `vector(1536)` values; application ranking reuses those stored vectors.
 
@@ -103,7 +103,7 @@ Evaluation runs are anonymous during the initial MVP. They still read only `APPR
 ## Production configuration
 
 - Configure `ConnectionStrings__PostgreSql` for the PgBouncer endpoint and set `EmbeddingProcessing__Mode=Queued`.
-- Implement `AzureEmbeddingProvider` with the approved Azure OpenAI deployment and managed identity.
+- Configure `AzureOpenAI__Endpoint`, `AzureOpenAI__DeploymentName`, and `AzureOpenAI__ModelVersion`; optionally set `AzureOpenAI__ManagedIdentityClientId` for a user-assigned identity. The model version must match the active `nlp.nlp_model_version` database record.
 - Restore the approved workload-identity mechanism before expanding access beyond the controlled MVP environment.
 - Keep API/worker/migration database identities separate and grant least privilege by schema/function.
 - Keep intent text, vectors, identity values, presence, provider payloads, and feedback text out of telemetry.

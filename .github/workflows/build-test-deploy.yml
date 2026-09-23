@@ -2,9 +2,9 @@ name: build-test-deploy
 
 on:
   pull_request:
-    branches: [develop]
+    branches: [develop, main]
   push:
-    branches: [develop]
+    branches: [develop, main]
   workflow_dispatch:
     inputs:
       environment:
@@ -24,7 +24,8 @@ concurrency:
 env:
   DOTNET_VERSION: 10.0.x
   SOLUTION: Olga.Nlp.sln
-  IMAGE_NAME: olga-nlp-api
+  API_IMAGE_NAME: olga-nlp-api
+  WORKER_IMAGE_NAME: olga-nlp-worker
 
 jobs:
   quality:
@@ -70,8 +71,11 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Validate production container build
+      - name: Validate API production container build
         run: docker build --file src/Olga.Nlp.Api/Dockerfile --tag olga-nlp-api:ci .
+
+      - name: Validate worker production container build
+        run: docker build --file src/Olga.Nlp.Worker/Dockerfile --tag olga-nlp-worker:ci .
 
   deploy:
     name: Deploy ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref == 'refs/heads/main' && 'prd' || 'dev') }}
@@ -89,6 +93,25 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Validate deployment configuration
+        shell: bash
+        env:
+          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
+          NLP_WORKER_CONTAINER_APP_NAME: ${{ vars.NLP_WORKER_CONTAINER_APP_NAME }}
+          AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT_NAME: ${{ vars.AZURE_OPENAI_DEPLOYMENT_NAME }}
+          AZURE_OPENAI_MODEL_VERSION: ${{ vars.AZURE_OPENAI_MODEL_VERSION }}
+        run: |
+          : "${ACR_LOGIN_SERVER:?GitHub environment variable ACR_LOGIN_SERVER is required}"
+          : "${AZURE_RESOURCE_GROUP:?GitHub environment variable AZURE_RESOURCE_GROUP is required}"
+          : "${CONTAINER_APP_NAME:?GitHub environment variable CONTAINER_APP_NAME is required}"
+          : "${NLP_WORKER_CONTAINER_APP_NAME:?GitHub environment variable NLP_WORKER_CONTAINER_APP_NAME is required}"
+          : "${AZURE_OPENAI_ENDPOINT:?GitHub environment variable AZURE_OPENAI_ENDPOINT is required}"
+          : "${AZURE_OPENAI_DEPLOYMENT_NAME:?GitHub environment variable AZURE_OPENAI_DEPLOYMENT_NAME is required}"
+          : "${AZURE_OPENAI_MODEL_VERSION:?GitHub environment variable AZURE_OPENAI_MODEL_VERSION is required}"
+
       - name: Sign in to Azure with OIDC
         uses: azure/login@v3
         with:
@@ -105,65 +128,102 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build and push immutable image
-        id: image
+      - name: Build and push immutable API image
+        id: api_image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: src/Olga.Nlp.Api/Dockerfile
           push: true
-          tags: ${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ vars.ACR_LOGIN_SERVER }}/${{ env.API_IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha,scope=olga-nlp-api
+          cache-to: type=gha,mode=max,scope=olga-nlp-api
           provenance: mode=max
           sbom: true
 
-      - name: Scan image
+      - name: Build and push immutable worker image
+        id: worker_image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/Olga.Nlp.Worker/Dockerfile
+          push: true
+          tags: ${{ vars.ACR_LOGIN_SERVER }}/${{ env.WORKER_IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha,scope=olga-nlp-worker
+          cache-to: type=gha,mode=max,scope=olga-nlp-worker
+          provenance: mode=max
+          sbom: true
+
+      - name: Scan API image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}
+          image-ref: ${{ vars.ACR_LOGIN_SERVER }}/${{ env.API_IMAGE_NAME }}@${{ steps.api_image.outputs.digest }}
           format: table
           ignore-unfixed: true
           severity: HIGH,CRITICAL
           exit-code: 1
 
-      - name: Deploy image digest
+      - name: Scan worker image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ vars.ACR_LOGIN_SERVER }}/${{ env.WORKER_IMAGE_NAME }}@${{ steps.worker_image.outputs.digest }}
+          format: table
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: 1
+
+      - name: Deploy image digests
         shell: bash
         env:
           ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
           AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-          CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          API_CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
+          NLP_WORKER_CONTAINER_APP_NAME: ${{ vars.NLP_WORKER_CONTAINER_APP_NAME }}
+          API_IMAGE_DIGEST: ${{ steps.api_image.outputs.digest }}
+          WORKER_IMAGE_DIGEST: ${{ steps.worker_image.outputs.digest }}
+          AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT_NAME: ${{ vars.AZURE_OPENAI_DEPLOYMENT_NAME }}
+          AZURE_OPENAI_MODEL_VERSION: ${{ vars.AZURE_OPENAI_MODEL_VERSION }}
+          AZURE_OPENAI_MANAGED_IDENTITY_CLIENT_ID: ${{ vars.AZURE_OPENAI_MANAGED_IDENTITY_CLIENT_ID }}
         run: |
-          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_NAME}@${IMAGE_DIGEST}"
+          api_image_ref="${ACR_LOGIN_SERVER}/${API_IMAGE_NAME}@${API_IMAGE_DIGEST}"
+          worker_image_ref="${ACR_LOGIN_SERVER}/${WORKER_IMAGE_NAME}@${WORKER_IMAGE_DIGEST}"
           revision_suffix="${GITHUB_SHA:0:8}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           include_exception_details=false
           [[ "$DEPLOY_ENVIRONMENT" == "dev" ]] && include_exception_details=true
+
           az containerapp update \
-            --name "$CONTAINER_APP_NAME" \
+            --name "$API_CONTAINER_APP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
-            --image "$image_ref" \
-            --set-env-vars Hosting__AzureContainerAppsIngress=true "Diagnostics__IncludeExceptionDetails=$include_exception_details" \
+            --image "$api_image_ref" \
+            --set-env-vars Hosting__AzureContainerAppsIngress=true "Diagnostics__IncludeExceptionDetails=$include_exception_details" EmbeddingProvider=Azure EmbeddingProcessing__Mode=Queued "AzureOpenAI__Endpoint=$AZURE_OPENAI_ENDPOINT" "AzureOpenAI__DeploymentName=$AZURE_OPENAI_DEPLOYMENT_NAME" "AzureOpenAI__ModelVersion=$AZURE_OPENAI_MODEL_VERSION" "AzureOpenAI__ManagedIdentityClientId=$AZURE_OPENAI_MANAGED_IDENTITY_CLIENT_ID" \
             --revision-suffix "$revision_suffix" \
             --output none
           az containerapp ingress update \
-            --name "$CONTAINER_APP_NAME" \
+            --name "$API_CONTAINER_APP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --allow-insecure false \
             --output none
 
+          az containerapp update \
+            --name "$NLP_WORKER_CONTAINER_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "$worker_image_ref" \
+            --set-env-vars "AzureOpenAI__Endpoint=$AZURE_OPENAI_ENDPOINT" "AzureOpenAI__DeploymentName=$AZURE_OPENAI_DEPLOYMENT_NAME" "AzureOpenAI__ModelVersion=$AZURE_OPENAI_MODEL_VERSION" "AzureOpenAI__ManagedIdentityClientId=$AZURE_OPENAI_MANAGED_IDENTITY_CLIENT_ID" \
+            --revision-suffix "$revision_suffix" \
+            --output none
 
-          revision=$(az containerapp show \
-            --name "$CONTAINER_APP_NAME" \
+          api_revision=$(az containerapp show \
+            --name "$API_CONTAINER_APP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --query properties.latestRevisionName \
             --output tsv)
 
           for attempt in {1..20}; do
             health=$(az containerapp revision show \
-              --name "$CONTAINER_APP_NAME" \
+              --name "$API_CONTAINER_APP_NAME" \
               --resource-group "$AZURE_RESOURCE_GROUP" \
-              --revision "$revision" \
+              --revision "$api_revision" \
               --query properties.healthState \
               --output tsv)
             [[ "$health" == "Healthy" ]] && break
@@ -172,9 +232,30 @@ jobs:
             sleep 15
           done
 
+          worker_revision=$(az containerapp show \
+            --name "$NLP_WORKER_CONTAINER_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query properties.latestRevisionName \
+            --output tsv)
+
+          for attempt in {1..20}; do
+            read -r running health < <(az containerapp revision show \
+              --name "$NLP_WORKER_CONTAINER_APP_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --revision "$worker_revision" \
+              --query "[properties.runningState, properties.healthState]" \
+              --output tsv)
+            [[ "$running" == "Running" && "$health" != "Unhealthy" && "$health" != "Failed" ]] && break
+            [[ "$running" == "Failed" || "$health" == "Unhealthy" || "$health" == "Failed" ]] && exit 1
+            [[ "$attempt" == "20" ]] && exit 1
+            sleep 15
+          done
+
           {
-            echo "### NLP API deployment"
+            echo "### NLP deployment"
             echo "- Environment: \`${DEPLOY_ENVIRONMENT}\`"
-            echo "- Revision: \`${revision}\`"
-            echo "- Image: \`${image_ref}\`"
+            echo "- API revision: \`${api_revision}\`"
+            echo "- API image: \`${api_image_ref}\`"
+            echo "- Worker revision: \`${worker_revision}\`"
+            echo "- Worker image: \`${worker_image_ref}\`"
           } >> "$GITHUB_STEP_SUMMARY"

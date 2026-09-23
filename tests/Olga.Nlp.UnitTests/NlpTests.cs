@@ -23,6 +23,7 @@ public sealed class NlpTests
         var want = await firstProvider.EmbedAsync("cold-chain pharmaceutical storage", default);
         var related = await secondProvider.EmbedAsync("temperature controlled healthcare warehouse", default);
         var unrelated = await secondProvider.EmbedAsync("digital marketing website", default);
+        Assert.Equal(AzureEmbeddingOptions.Dimensions, want.Length);
         Assert.Equal(want, await secondProvider.EmbedAsync("cold-chain pharmaceutical storage", default));
         var scorer = new ReciprocalScorer();
         Assert.True(scorer.Score(want, related, null, null).Forward > scorer.Score(want, unrelated, null, null).Forward);

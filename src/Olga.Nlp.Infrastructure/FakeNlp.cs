@@ -40,7 +40,7 @@ public sealed class FakeEmbeddingProvider : IEmbeddingProvider
     public Task<float[]> EmbedAsync(string text, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        var vector = new float[128];
+        var vector = new float[AzureEmbeddingOptions.Dimensions];
         foreach (Match match in Regex.Matches(text.ToLowerInvariant(), "[a-z0-9]+", RegexOptions.CultureInvariant))
         {
             var token = Concepts.TryGetValue(match.Value, out var concept) ? concept : match.Value;
@@ -59,12 +59,6 @@ public sealed class LocalEmbeddingProvider : IEmbeddingProvider
     private readonly FakeEmbeddingProvider inner = new();
     public string ModelVersion => "local-placeholder-v1";
     public Task<float[]> EmbedAsync(string text, CancellationToken ct) => inner.EmbedAsync(text, ct);
-}
-
-public sealed class AzureEmbeddingProvider : IEmbeddingProvider
-{
-    public string ModelVersion => "azure-not-configured";
-    public Task<float[]> EmbedAsync(string text, CancellationToken ct) => throw new NotSupportedException("Configure Azure OpenAI before selecting this provider.");
 }
 
 public sealed class ReciprocalScorer : IReciprocalScorer

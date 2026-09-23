@@ -27,8 +27,17 @@ builder.Services.AddDbContext<NlpDbContext>((services, options) => options
     .AddInterceptors(services.GetRequiredService<PostgresTransactionGuardInterceptor>())
     .UseNpgsql(services.GetRequiredService<NpgsqlDataSource>(),
         postgres => postgres.UseVector().CommandTimeout(60).EnableRetryOnFailure(3, TimeSpan.FromSeconds(5), null)));
+builder.Services.AddSingleton(AzureEmbeddingOptions.Create(
+    builder.Configuration["AzureOpenAI:Endpoint"],
+    builder.Configuration["AzureOpenAI:DeploymentName"],
+    builder.Configuration["AzureOpenAI:ModelVersion"],
+    builder.Configuration["AzureOpenAI:ManagedIdentityClientId"],
+    builder.Configuration["AzureOpenAI:TimeoutSeconds"],
+    builder.Configuration["AzureOpenAI:MaxRetries"]));
 builder.Services.AddSingleton<IEmbeddingProvider, AzureEmbeddingProvider>();
 builder.Services.AddScoped<IIntentRepository, IntentRepository>();
+builder.Services.AddScoped<EmbeddingJobProcessor>();
+builder.Services.AddHostedService<AzureEmbeddingModelValidator>();
 builder.Services.AddHostedService<EmbeddingJobWorker>();
 await builder.Build().RunAsync();
 
@@ -60,8 +69,7 @@ public sealed class EmbeddingJobWorker(IServiceScopeFactory scopes, ILogger<Embe
     {
         await using var scope = scopes.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<NlpDbContext>();
-        var provider = scope.ServiceProvider.GetRequiredService<IEmbeddingProvider>();
-        var repository = scope.ServiceProvider.GetRequiredService<IIntentRepository>();
+        var processor = scope.ServiceProvider.GetRequiredService<EmbeddingJobProcessor>();
         var jobs = await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
         {
             db.ChangeTracker.Clear();
@@ -91,36 +99,9 @@ public sealed class EmbeddingJobWorker(IServiceScopeFactory scopes, ILogger<Embe
 
         foreach (var job in jobs)
         {
-            try
-            {
-                var intent = await db.Intents.AsNoTracking().SingleOrDefaultAsync(x => x.IntentId == job.IntentId, ct);
-                if (intent is null || intent.Status != "PROCESSING")
-                {
-                    job.Status = "SUCCEEDED";
-                    job.ErrorCode = null;
-                }
-                else
-                {
-                    var embedding = await provider.EmbedAsync(intent.NormalizedText, ct);
-                    await repository.MarkReadyAsync(intent.IntentId, intent.NormalizedText, intent.NormalizedHash, embedding, provider.ModelVersion, intent.PreprocessingVersion, ct);
-                    job.Status = "SUCCEEDED";
-                    job.ErrorCode = null;
-                }
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                job.AttemptCount++;
-                job.Status = job.AttemptCount >= 5 ? "DEAD" : "FAILED";
-                job.AvailableAt = DateTimeOffset.UtcNow.AddSeconds(Math.Min(300, Math.Pow(2, job.AttemptCount) * 5));
-                job.ErrorCode = exception is ArgumentException ? "EMBEDDING_INPUT_INVALID" : "EMBEDDING_PROVIDER_FAILED";
+            await processor.ProcessAsync(job, ct);
+            if (job.Status is "FAILED" or "DEAD")
                 logger.LogWarning("Embedding job {JobId} failed with {ErrorCode} on attempt {AttemptCount}", job.JobId, job.ErrorCode, job.AttemptCount);
-            }
-            finally
-            {
-                job.LockedUntil = null;
-                job.UpdatedAt = DateTimeOffset.UtcNow;
-                await db.SaveChangesAsync(ct);
-            }
         }
         return jobs.Count;
     }

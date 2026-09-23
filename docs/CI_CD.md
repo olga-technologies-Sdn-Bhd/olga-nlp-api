@@ -25,6 +25,11 @@ Create GitHub Environments named `dev` and `prd`. Define these variables in each
 | `ACR_LOGIN_SERVER` | `acrolgadevmalaysiaweste.azurecr.io` | Image registry |
 | `AZURE_RESOURCE_GROUP` | `rg-olga-dev-malaysiawest` | Container App resource group |
 | `CONTAINER_APP_NAME` | `ca-olga-nlp-api-dev` | Deployment target |
+| `NLP_WORKER_CONTAINER_APP_NAME` | `ca-olga-nlp-worker-dev` | Worker deployment target |
+| `AZURE_OPENAI_ENDPOINT` | `https://<resource>.openai.azure.com/` | Azure OpenAI resource endpoint |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | `olga-text-embedding-3-small` | Deployment backed by `text-embedding-3-small` |
+| `AZURE_OPENAI_MODEL_VERSION` | `azure-text-embedding-3-small-1536-v1` | Stable application model version; must match the active database record |
+| `AZURE_OPENAI_MANAGED_IDENTITY_CLIENT_ID` | Runtime identity client UUID | User-assigned managed identity; leave empty for a system-assigned identity |
 
 No long-lived Azure client secret is required. This repository uses GitHub's immutable OIDC subject format. Configure the deployment identity's federated credentials with issuer `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`, and these exact subjects:
 
@@ -47,6 +52,8 @@ The `dev` deployment runs in `malaysiawest` with these provisioned resources:
 | Container registry | `acrolgadevmalaysiaweste` |
 | Container Apps environment | `cae-olga-dev-devmalaysiaweste` |
 | NLP API Container App | `ca-olga-nlp-api-dev` |
+| NLP worker Container App | `ca-olga-nlp-worker-dev` |
+| Azure OpenAI deployment | `olga-text-embedding-3-small` (`text-embedding-3-small`, 1,536 dimensions) |
 | PostgreSQL Flexible Server | `psql-olga-devmalaysiaweste.postgres.database.azure.com` |
 | PostgreSQL database | `olga_connect_dev` |
 | Key Vault | `kv-olga-devmalaysiaweste` |
@@ -54,11 +61,13 @@ The `dev` deployment runs in `malaysiawest` with these provisioned resources:
 
 The PostgreSQL server has public network access disabled. It uses the delegated subnet `snet-postgresql` and private DNS zone `private.postgres.database.azure.com`. The Container Apps environment uses `snet-container-apps` for VNet integration. The NLP API has internal-only ingress.
 
-Configure the API container with `ConnectionStrings__PostgreSql` as a Key Vault-backed Container Apps secret reference. The connection must use the server FQDN above, database `olga_connect_dev`, port `5432`, and TLS certificate verification. For the initial anonymous MVP, optionally set `Mvp__DefaultMemberId`; it defaults to `A123`. `Diagnostics__IncludeExceptionDetails` includes `stack_trace` in unhandled-error responses when enabled; the deployment workflow enables it in `dev` and disables it in `prd`, while the root exception message is returned in both environments. Requests may select any member with `X-Member-Id`, so this deployment must not be treated as suitable for public or sensitive member data. For the current development deployment, configure `EmbeddingProvider=Fake` and `EmbeddingProcessing__Mode=Inline`. Never place secret values in GitHub variables or workflow YAML.
+Configure both containers with `ConnectionStrings__PostgreSql` as a Key Vault-backed Container Apps secret reference. The connection must use the server FQDN above, database `olga_connect_dev`, port `5432`, and TLS certificate verification. The deployment workflow configures the deployed API with `EmbeddingProvider=Azure` and `EmbeddingProcessing__Mode=Queued`; local Development remains `Fake`/`Inline`. The worker always requires the `AzureOpenAI` settings and validates them before it starts. The stable `AZURE_OPENAI_MODEL_VERSION` value must identify an active `nlp.nlp_model_version` row whose provider, deployment, dimensions, and preprocessing version are respectively `AZURE_OPENAI`, the configured deployment, `1536`, and `normalizer-v1`.
+
+Assign the runtime managed identity the `Cognitive Services OpenAI User` role on the Azure OpenAI resource. Give the same identity access to the PostgreSQL/Key Vault configuration used by both containers. For the initial anonymous MVP, optionally set `Mvp__DefaultMemberId`; it defaults to `A123`. `Diagnostics__IncludeExceptionDetails` includes `stack_trace` in unhandled-error responses when enabled; the deployment workflow enables it in `dev` and disables it in `prd`, while the root exception message is returned in both environments. Requests may select any member with `X-Member-Id`, so this deployment must not be treated as suitable for public or sensitive member data. Never place secret values in GitHub variables or workflow YAML.
 
 The current registry uses the non-ABAC permission model. Grant the GitHub deployment identity `AcrPush` on `acrolgadevmalaysiaweste`, and grant the runtime managed identity only `AcrPull` on that registry. The runtime identity also needs permission to read the referenced Key Vault secrets. PostgreSQL schema creation and upgrades must run from a trusted host with network access to the private database endpoint.
 
-The API image listens on port `8080`. Configure Container Apps ingress and probes for that target port. Use `/health` as the process liveness endpoint and `/ready` as the readiness endpoint; `/ready` verifies PostgreSQL connectivity. Published images use the immutable commit tag `acrolgadevmalaysiaweste.azurecr.io/olga-nlp-api:<commit-sha>`, and deployment resolves that image to its digest.
+The API image listens on port `8080`. Configure Container Apps ingress and probes for that target port. Use `/health` as the process liveness endpoint and `/ready` as the readiness endpoint; `/ready` verifies PostgreSQL connectivity. The worker has no ingress and must have at least one always-on replica so queued work is continuously consumed. Published API and worker images use immutable commit tags and deployment resolves both to their digests. The workflow waits for the API revision to become healthy and for the worker revision to reach the running state.
 
 ## Runner choice
 
