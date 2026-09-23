@@ -78,6 +78,8 @@ All endpoints are anonymous for the initial MVP. Member-scoped endpoints use the
 - `GET /health`
 - `GET /ready`
 
+The development deployment uses external HTTPS ingress. Swagger is available at `https://ca-olga-nlp-api-dev.agreeableocean-8bb4ca77.malaysiawest.azurecontainerapps.io/swagger`. External ingress exposes the entire API, not only Swagger; all endpoints remain unauthenticated during the temporary MVP phase.
+
 Swagger displays each applicable client header:
 
 | Header | Applies to | Client behavior |
@@ -88,7 +90,7 @@ Swagger displays each applicable client header:
 
 Errors contain `code`, `message`, and `correlation_id`; unhandled errors return the root exception message in every environment, and `Diagnostics__IncludeExceptionDetails` controls whether they also include `stack_trace`. Foreign-key failures return `RESOURCE_REFERENCE_NOT_FOUND` instead of an unhandled database error. Responses never expose vectors, raw identity subjects, member presence cells, block direction, provider payloads, or moderation detail.
 
-The current middleware requires `Idempotency-Key` consistently, but durable same-key/same-result replay is complete only for match requests and evaluation runs. Intent and feedback replay storage remains production-readiness work. Internal evaluation endpoints are protected by internal Container Apps ingress only; workload identity and evaluator authorization remain required before production use.
+The current middleware requires `Idempotency-Key` consistently, but durable same-key/same-result replay is complete only for match requests and evaluation runs. Intent and feedback replay storage remains production-readiness work. The internal evaluation endpoints are reachable through the external API ingress despite their `/internal/` path and remain unauthenticated during the temporary MVP phase; workload identity and evaluator authorization are required before production use.
 
 ## Match execution and feedback
 
