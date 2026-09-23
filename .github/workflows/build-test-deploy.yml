@@ -244,7 +244,7 @@ jobs:
               --revision "$worker_revision" \
               --query "[properties.runningState, properties.healthState]" \
               --output tsv)
-            [[ "$running" == "Running" && "$health" != "Unhealthy" && "$health" != "Failed" ]] && break
+            [[ "$health" == "Healthy" && ( "$running" == "Running" || "$running" == "RunningAtMaxScale" ) ]] && break
             [[ "$running" == "Failed" || "$health" == "Unhealthy" || "$health" == "Failed" ]] && exit 1
             [[ "$attempt" == "20" ]] && exit 1
             sleep 15
