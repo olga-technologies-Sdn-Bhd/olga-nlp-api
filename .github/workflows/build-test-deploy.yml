@@ -238,12 +238,15 @@ jobs:
             --output tsv)
 
           for attempt in {1..20}; do
-            read -r running health < <(az containerapp revision show \
+            mapfile -t worker_state < <(az containerapp revision show \
               --name "$NLP_WORKER_CONTAINER_APP_NAME" \
               --resource-group "$AZURE_RESOURCE_GROUP" \
               --revision "$worker_revision" \
               --query "[properties.runningState, properties.healthState]" \
               --output tsv)
+            running="${worker_state[0]:-}"
+            health="${worker_state[1]:-}"
+            echo "Worker revision $worker_revision attempt $attempt: running=$running health=$health"
             [[ "$health" == "Healthy" && ( "$running" == "Running" || "$running" == "RunningAtMaxScale" ) ]] && break
             [[ "$running" == "Failed" || "$health" == "Unhealthy" || "$health" == "Failed" ]] && exit 1
             [[ "$attempt" == "20" ]] && exit 1
