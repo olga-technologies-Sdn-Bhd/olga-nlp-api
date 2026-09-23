@@ -103,7 +103,7 @@ Evaluation runs are anonymous during the initial MVP. They still read only `APPR
 ## Production configuration
 
 - Configure `ConnectionStrings__PostgreSql` for the PgBouncer endpoint and set `EmbeddingProcessing__Mode=Queued`.
-- Configure `AzureOpenAI__Endpoint`, `AzureOpenAI__DeploymentName`, and `AzureOpenAI__ModelVersion`; optionally set `AzureOpenAI__ManagedIdentityClientId` for a user-assigned identity. The model version must match the active `nlp.nlp_model_version` database record.
+- Configure `AzureOpenAI__Endpoint`, `AzureOpenAI__DeploymentName`, and `AzureOpenAI__ModelVersion`; set each workload's user-assigned identity through `AzureOpenAI__ManagedIdentityClientId` or `AZURE_CLIENT_ID`. The model version must match the active `nlp.nlp_model_version` database record.
 - Restore the approved workload-identity mechanism before expanding access beyond the controlled MVP environment.
 - Keep API/worker/migration database identities separate and grant least privilege by schema/function.
 - Keep intent text, vectors, identity values, presence, provider payloads, and feedback text out of telemetry.

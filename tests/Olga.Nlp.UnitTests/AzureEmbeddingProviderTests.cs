@@ -29,7 +29,7 @@ public sealed class AzureEmbeddingProviderTests
         Assert.Equal("azure-text-embedding-3-small-1536-v1", provider.ModelVersion);
         Assert.Equal(AzureEmbeddingOptions.Dimensions, result.Length);
         Assert.Equal(new Uri("https://olga-openai.openai.azure.com/"), captured!.Endpoint);
-        Assert.Equal("olga-text-embedding-3-small", captured.DeploymentName);
+        Assert.Equal("text-embedding-3-small", captured.DeploymentName);
         Assert.Equal(AzureEmbeddingOptions.RequiredModelName, captured.ModelName);
         Assert.Equal(AzureEmbeddingOptions.Dimensions, captured.Dimensions);
     }
@@ -122,7 +122,7 @@ public sealed class AzureEmbeddingProviderTests
     private static AzureEmbeddingOptions Options(TimeSpan? timeout = null, int maxRetries = 3) => new()
     {
         Endpoint = new Uri("https://olga-openai.openai.azure.com/"),
-        DeploymentName = "olga-text-embedding-3-small",
+        DeploymentName = "text-embedding-3-small",
         ModelVersion = "azure-text-embedding-3-small-1536-v1",
         Timeout = timeout ?? TimeSpan.FromSeconds(5),
         MaxRetries = maxRetries

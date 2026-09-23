@@ -184,7 +184,6 @@ jobs:
           AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_DEPLOYMENT_NAME: ${{ vars.AZURE_OPENAI_DEPLOYMENT_NAME }}
           AZURE_OPENAI_MODEL_VERSION: ${{ vars.AZURE_OPENAI_MODEL_VERSION }}
-          AZURE_OPENAI_MANAGED_IDENTITY_CLIENT_ID: ${{ vars.AZURE_OPENAI_MANAGED_IDENTITY_CLIENT_ID }}
         run: |
           api_image_ref="${ACR_LOGIN_SERVER}/${API_IMAGE_NAME}@${API_IMAGE_DIGEST}"
           worker_image_ref="${ACR_LOGIN_SERVER}/${WORKER_IMAGE_NAME}@${WORKER_IMAGE_DIGEST}"
@@ -196,7 +195,7 @@ jobs:
             --name "$API_CONTAINER_APP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --image "$api_image_ref" \
-            --set-env-vars Hosting__AzureContainerAppsIngress=true "Diagnostics__IncludeExceptionDetails=$include_exception_details" EmbeddingProvider=Azure EmbeddingProcessing__Mode=Queued "AzureOpenAI__Endpoint=$AZURE_OPENAI_ENDPOINT" "AzureOpenAI__DeploymentName=$AZURE_OPENAI_DEPLOYMENT_NAME" "AzureOpenAI__ModelVersion=$AZURE_OPENAI_MODEL_VERSION" "AzureOpenAI__ManagedIdentityClientId=$AZURE_OPENAI_MANAGED_IDENTITY_CLIENT_ID" \
+            --set-env-vars Hosting__AzureContainerAppsIngress=true "Diagnostics__IncludeExceptionDetails=$include_exception_details" EmbeddingProvider=Azure EmbeddingProcessing__Mode=Queued "AzureOpenAI__Endpoint=$AZURE_OPENAI_ENDPOINT" "AzureOpenAI__DeploymentName=$AZURE_OPENAI_DEPLOYMENT_NAME" "AzureOpenAI__ModelVersion=$AZURE_OPENAI_MODEL_VERSION" \
             --revision-suffix "$revision_suffix" \
             --output none
           az containerapp ingress update \
@@ -209,7 +208,7 @@ jobs:
             --name "$NLP_WORKER_CONTAINER_APP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --image "$worker_image_ref" \
-            --set-env-vars "AzureOpenAI__Endpoint=$AZURE_OPENAI_ENDPOINT" "AzureOpenAI__DeploymentName=$AZURE_OPENAI_DEPLOYMENT_NAME" "AzureOpenAI__ModelVersion=$AZURE_OPENAI_MODEL_VERSION" "AzureOpenAI__ManagedIdentityClientId=$AZURE_OPENAI_MANAGED_IDENTITY_CLIENT_ID" \
+            --set-env-vars "AzureOpenAI__Endpoint=$AZURE_OPENAI_ENDPOINT" "AzureOpenAI__DeploymentName=$AZURE_OPENAI_DEPLOYMENT_NAME" "AzureOpenAI__ModelVersion=$AZURE_OPENAI_MODEL_VERSION" \
             --revision-suffix "$revision_suffix" \
             --output none
 

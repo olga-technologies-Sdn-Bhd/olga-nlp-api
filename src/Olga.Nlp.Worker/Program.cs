@@ -31,7 +31,7 @@ builder.Services.AddSingleton(AzureEmbeddingOptions.Create(
     builder.Configuration["AzureOpenAI:Endpoint"],
     builder.Configuration["AzureOpenAI:DeploymentName"],
     builder.Configuration["AzureOpenAI:ModelVersion"],
-    builder.Configuration["AzureOpenAI:ManagedIdentityClientId"],
+    builder.Configuration["AzureOpenAI:ManagedIdentityClientId"] ?? builder.Configuration["AZURE_CLIENT_ID"],
     builder.Configuration["AzureOpenAI:TimeoutSeconds"],
     builder.Configuration["AzureOpenAI:MaxRetries"]));
 builder.Services.AddSingleton<IEmbeddingProvider, AzureEmbeddingProvider>();
