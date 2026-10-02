@@ -100,4 +100,9 @@ public sealed record EvaluationRunResponse(
 
 public sealed record NormalizeRequest(string Text, string? Language);
 public sealed record NormalizeResponse(string NormalizedText, string Language, string Hash, bool ContainsPii);
-public sealed record ApiError(string Code, string Message, string CorrelationId, IReadOnlyDictionary<string, string[]>? FieldErrors = null);
+public sealed record ApiError(
+    string Code,
+    string Message,
+    string CorrelationId,
+    IReadOnlyDictionary<string, string[]>? FieldErrors = null,
+    string? StackTrace = null);

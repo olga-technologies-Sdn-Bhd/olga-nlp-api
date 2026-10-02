@@ -71,9 +71,69 @@ public sealed class MatchContractTests : IClassFixture<WebApplicationFactory<Pro
     }
 
     [Fact]
+    public async Task OpenApi_exposes_required_client_headers_on_the_correct_operations()
+    {
+        using var response = await client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+
+        var intentRead = Operation(document, "/v1/intents/{intentId}", "get");
+        AssertHeader(intentRead, "X-Member-Id", required: false, maxLength: 64);
+        AssertNoHeader(intentRead, "Idempotency-Key");
+
+        var intentWrite = Operation(document, "/v1/intents", "post");
+        AssertHeader(intentWrite, "X-Member-Id", required: false, maxLength: 64);
+        AssertHeader(intentWrite, "Idempotency-Key", required: true, maxLength: 128);
+        AssertHeader(intentWrite, "If-Match", required: false);
+
+        var evaluation = Operation(document, "/v1/internal/evaluation-runs", "post");
+        AssertHeader(evaluation, "Idempotency-Key", required: true, maxLength: 128);
+        AssertNoHeader(evaluation, "X-Member-Id");
+
+        var normalize = Operation(document, "/v1/normalize", "post");
+        AssertNoHeader(normalize, "X-Member-Id");
+        AssertNoHeader(normalize, "Idempotency-Key");
+    }
+
+    [Fact]
+    public async Task Member_routes_reject_an_oversized_member_header()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/v1/intents/a-want");
+        request.Headers.Add("X-Member-Id", new string('x', 65));
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+        using var body = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+        Assert.Equal("MEMBER_ID_INVALID", body.RootElement.GetProperty("code").GetString());
+    }
+
+    [Fact]
     public async Task Api_is_callable_without_a_service_credential()
     {
         using var response = await client.PostAsJsonAsync("/v1/normalize", new NormalizeRequest("hello", null));
         response.EnsureSuccessStatusCode();
+    }
+
+    private static System.Text.Json.JsonElement Operation(System.Text.Json.JsonDocument document, string path, string method) =>
+        document.RootElement.GetProperty("paths").GetProperty(path).GetProperty(method);
+
+    private static void AssertHeader(System.Text.Json.JsonElement operation, string name, bool required, int? maxLength = null)
+    {
+        var header = operation.GetProperty("parameters").EnumerateArray()
+            .Single(parameter => parameter.GetProperty("in").GetString() == "header"
+                && string.Equals(parameter.GetProperty("name").GetString(), name, StringComparison.OrdinalIgnoreCase));
+        var actualRequired = header.TryGetProperty("required", out var requiredProperty) && requiredProperty.GetBoolean();
+        Assert.Equal(required, actualRequired);
+        if (maxLength is not null)
+            Assert.Equal(maxLength.Value, header.GetProperty("schema").GetProperty("maxLength").GetInt32());
+    }
+
+    private static void AssertNoHeader(System.Text.Json.JsonElement operation, string name)
+    {
+        if (!operation.TryGetProperty("parameters", out var parameters)) return;
+        Assert.DoesNotContain(parameters.EnumerateArray(), parameter =>
+            parameter.GetProperty("in").GetString() == "header"
+            && string.Equals(parameter.GetProperty("name").GetString(), name, StringComparison.OrdinalIgnoreCase));
     }
 }

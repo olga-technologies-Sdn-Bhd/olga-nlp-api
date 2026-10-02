@@ -1,1 +1,18 @@
-<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><AssemblyName>Olga.Nlp.Infrastructure</AssemblyName></PropertyGroup><ItemGroup><ProjectReference Include="..\Olga.Nlp.Application\Olga.Nlp.Application.csproj" /><PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" /><PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" /><PackageReference Include="Pgvector.EntityFrameworkCore" Version="0.3.0" /><PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12"><PrivateAssets>all</PrivateAssets></PackageReference><PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.12" /></ItemGroup></Project>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Olga.Nlp.Infrastructure</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Olga.Nlp.Application\Olga.Nlp.Application.csproj" />
+    <PackageReference Include="Azure.AI.OpenAI" Version="2.1.0" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.12" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageReference Include="Pgvector.EntityFrameworkCore" Version="0.3.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.12" />
+  </ItemGroup>
+</Project>

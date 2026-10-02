@@ -79,8 +79,9 @@ Other NLP events are `NlpIntentNormalized.v1`, `NlpIntentMatchReady.v1`, `NlpFee
 
 ## Security and operational rules
 
-- Production member identity comes from a validated `sub` claim. `X-Member-Id` is Development-only.
-- Service-to-service calls require workload identity; the static token is a bootstrap mechanism, not the target design.
+- During the anonymous MVP, member context comes from optional `X-Member-Id` and otherwise uses `Mvp__DefaultMemberId`; this is not authentication. Production member identity must come from a validated `sub` claim.
+- Internal evaluation routes currently rely on internal-only ingress. Service-to-service calls require workload identity and evaluator authorization before production use.
+- Stateful POST operations require a client-generated `Idempotency-Key`; retries of one logical action reuse the key. Existing intent updates use the last returned ETag in `If-Match`. Swagger documents these headers on applicable operations.
 - The NLP runtime receives read-only access to approved Core projections and write access only to the `nlp` and permitted `ops` objects.
 - One model space and vector dimension must be used for both directions in a reciprocal comparison.
 - Consent, eligibility, block, suppression, and authorization failures fail closed.

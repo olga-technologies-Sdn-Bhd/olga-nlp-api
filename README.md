@@ -56,13 +56,13 @@ curl.exe -X POST http://localhost:5000/v1/match-requests `
 
 Normalization is synchronous. The intent row commits original text, PII-minimized normalized text, normalized hash, language, PII signal, preprocessing version, and `PROCESSING` status together.
 
-Development uses `EmbeddingProcessing:Mode=Inline`. Production uses `Queued`, which writes `nlp.NlpProcessingJob`; the worker embeds the stored normalized text, applies bounded retries and a lease, and marks the intent `MATCH_READY`. Normal searches reuse stored vectors and never call the embedding provider.
+Local development uses the deterministic 1,536-dimensional fake provider with `EmbeddingProcessing:Mode=Inline`. Deployed environments use Azure OpenAI with managed identity and `Queued`, which writes `nlp.NlpProcessingJob`; the worker embeds the stored normalized text, applies bounded retries and a lease, and marks the intent `MATCH_READY`. Normal searches reuse stored vectors and never call the embedding provider.
 
 All WANT and OFFER vectors in a comparison must use the same active model version and 1,536 dimensions. Candidate retrieval is bounded to at most 200 eligible candidates before .NET ranking. PostgreSQL persists embeddings as native `vector(1536)` values; application ranking reuses those stored vectors.
 
 ## API contracts
 
-All endpoints are anonymous for the initial MVP. Member-scoped endpoints use the optional `X-Member-Id` header and otherwise fall back to `Mvp__DefaultMemberId` (`A123` by default). Do not treat this selector as authentication; restore verified caller and evaluator identities before exposing sensitive data beyond the controlled MVP environment.
+All endpoints are anonymous for the initial MVP. Member-scoped endpoints use the optional `X-Member-Id` header and otherwise fall back to `Mvp__DefaultMemberId` (`A123` by default). Do not treat this selector as authentication; restore verified caller and evaluator identities before exposing sensitive data beyond the controlled MVP environment. Member IDs are limited to 64 characters and are supplied by the identity lifecycle rather than invented by clients.
 
 - `POST /v1/intents`
 - `GET /v1/intents/{intentId}`
@@ -78,7 +78,19 @@ All endpoints are anonymous for the initial MVP. Member-scoped endpoints use the
 - `GET /health`
 - `GET /ready`
 
-Externally retryable mutations use `Idempotency-Key`. Intent updates use `If-Match`/ETag. Errors contain `code`, safe `message`, and `correlation_id`. Responses never expose vectors, raw identity subjects, member presence cells, block direction, provider payloads, or moderation detail.
+The development deployment uses external HTTPS ingress. Swagger is available at `https://ca-olga-nlp-api-dev.agreeableocean-8bb4ca77.malaysiawest.azurecontainerapps.io/swagger`. External ingress exposes the entire API, not only Swagger; all endpoints remain unauthenticated during the temporary MVP phase.
+
+Swagger displays each applicable client header:
+
+| Header | Applies to | Client behavior |
+| --- | --- | --- |
+| `X-Member-Id` | Intent, match-request, search, and feedback operations | Optional only because the MVP falls back to `Mvp__DefaultMemberId`; maximum 64 characters. Replace this selector with a validated JWT identity before production use. |
+| `Idempotency-Key` | Stateful `POST` operations | Required, maximum 128 characters. Generate a UUID for each new logical action and reuse it for retries. For match requests and the legacy search endpoint, it must equal `request_id`. |
+| `If-Match` | `POST /v1/intents` | Send the ETag returned by `GET /v1/intents/{intentId}` when updating an existing intent; omit it only when creating the intent. |
+
+Errors contain `code`, `message`, and `correlation_id`; unhandled errors return the root exception message in every environment, and `Diagnostics__IncludeExceptionDetails` controls whether they also include `stack_trace`. Foreign-key failures return `RESOURCE_REFERENCE_NOT_FOUND` instead of an unhandled database error. Responses never expose vectors, raw identity subjects, member presence cells, block direction, provider payloads, or moderation detail.
+
+The current middleware requires `Idempotency-Key` consistently, but durable same-key/same-result replay is complete only for match requests and evaluation runs. Intent and feedback replay storage remains production-readiness work. The internal evaluation endpoints are reachable through the external API ingress despite their `/internal/` path and remain unauthenticated during the temporary MVP phase; workload identity and evaluator authorization are required before production use.
 
 ## Match execution and feedback
 
@@ -93,7 +105,7 @@ Evaluation runs are anonymous during the initial MVP. They still read only `APPR
 ## Production configuration
 
 - Configure `ConnectionStrings__PostgreSql` for the PgBouncer endpoint and set `EmbeddingProcessing__Mode=Queued`.
-- Implement `AzureEmbeddingProvider` with the approved Azure OpenAI deployment and managed identity.
+- Configure `AzureOpenAI__Endpoint`, `AzureOpenAI__DeploymentName`, and `AzureOpenAI__ModelVersion`; set each workload's user-assigned identity through `AzureOpenAI__ManagedIdentityClientId` or `AZURE_CLIENT_ID`. The model version must match the active `nlp.nlp_model_version` database record.
 - Restore the approved workload-identity mechanism before expanding access beyond the controlled MVP environment.
 - Keep API/worker/migration database identities separate and grant least privilege by schema/function.
 - Keep intent text, vectors, identity values, presence, provider payloads, and feedback text out of telemetry.
