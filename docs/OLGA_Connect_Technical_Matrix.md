@@ -80,7 +80,7 @@
 |---|---|
 | Identity | `POST /auth/register`; `POST /auth/verify`; `POST /auth/session/refresh`; `POST /auth/recover`; `POST /auth/logout` |
 | Profile | `GET/PATCH /me/profile`; `GET /members/{id}` |
-| Intent/matching | `POST/GET /intents`; `POST /match-requests`; `GET /match-requests/{id}`; `POST /matches/{id}/feedback` |
+| Intent/matching | `POST/GET /intents`; `POST /match-requests`; `GET /match-requests/{id}`; `GET /events/{id}/live-match-count?intent_id={id}&threshold={0..1}`; `POST /matches/{id}/feedback` |
 | Events | `GET /events`; `POST /events/{id}/register`; `POST/DELETE /events/{id}/live-mode`; `POST /events/{id}/presence` |
 | Connections | `POST /connection-requests`; `PATCH /connection-requests/{id}`; `DELETE /connections/{id}`; `POST /members/{id}/block`; `POST /reports` |
 | Chat | `GET /conversations`; `GET/POST /conversations/{id}/messages`; `POST /messages/{id}/receipts` |
@@ -233,6 +233,7 @@
 | Scoring direction | A-needs-to-B-offers and B-needs-to-A-offers |
 | Reciprocity | Harmonic mean for mutual benefit; documented weighted direction for buyer/supplier flow |
 | Result count | Final 3-7 matches; default/maximum 7 |
+| Live count | Personalized read-only count uses the same eligibility/ranking path; required intent + 0..1 threshold; optional reciprocal filter; returns evaluated count, 200-candidate cap signal, and version trace; no persisted match request/result |
 | Explanation | Approved reason codes/templates derived only from contributing signals; suppress match if no valid explanation |
 | Version trace | Preprocessing, model/deployment, dimensions, normalized hash, ranking configuration, threshold on every result/request |
 | Provider failure | Reuse last approved embedding/model version; bounded retry/degraded response; rollback active version after failed evaluation |
@@ -269,6 +270,7 @@
 | Presence | Coarse geohash/H3 cell; foreground/check-in/venue source; short TTL; never exact coordinates/history |
 | Default proximity | `VENUE`; options `NONE`, `VENUE`, `COARSE_CELL` |
 | Presence freshness | Default maximum 15 minutes when proximity used |
+| Live filter count | Aggregate only; no candidate identity or presence data; `private, no-store`; a reached 200-candidate cap makes the result bounded rather than an event-wide total |
 | Alert threshold | Default final score >= 0.70 |
 | Alert caps | Default 2/member/hour; 10/member/event; minimum interval 30 minutes |
 | Alert eligibility | Active event policy + consent + registration/check-in/live mode/proximity as configured + member preference + stricter event/channel cap |

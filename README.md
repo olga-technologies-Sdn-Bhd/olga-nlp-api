@@ -68,7 +68,7 @@ All endpoints are anonymous for the initial MVP. Member-scoped endpoints use the
 - `GET /v1/intents/{intentId}`
 - `POST /v1/match-requests`
 - `GET /v1/match-requests/{requestId}`
-- `GET /v1/events/{eventId}/live-match-count?intent_id={intentId}&threshold={0..1}` - count currently eligible live members above the requested score (for example, `0.70` means 70%)
+- `GET /v1/events/{eventId}/live-match-count?intent_id={intentId}&threshold={0..1}` - count currently eligible live members at or above the requested score (for example, `0.70` means 70%)
 - `POST /v1/matches/{matchResultId}/feedback`
 - `POST /v1/matches/search` - compatibility endpoint
 - `POST /v1/feedback` - compatibility endpoint
@@ -79,13 +79,28 @@ All endpoints are anonymous for the initial MVP. Member-scoped endpoints use the
 - `GET /health`
 - `GET /ready`
 
+### Live match count
+
+Use the read-only live-count endpoint to populate event filters without creating or persisting a match request:
+
+```http
+GET /v1/events/event-001/live-match-count?intent_id=a-want&threshold=0.70&require_reciprocal=false
+X-Member-Id: A123
+```
+
+`intent_id` and `threshold` are required. The threshold is a score from `0` to `1`, so `0.70` means 70%; `require_reciprocal` is optional and defaults to `false`. The selected intent must be the caller's active, `MATCH_READY` WANT in the event context. IDs are limited to 64 characters.
+
+The count uses the same eligibility and ranking path as match search: active Live Mode/consent/visibility, shared event context, unexpired compatible embeddings, and block, connection, and suppression exclusions are applied before scoring. Members without a safe deterministic explanation are not counted. No match request or result rows are written, and a `GET` does not require `Idempotency-Key`.
+
+The response includes `count`, `candidates_evaluated`, `candidate_limit_reached`, the applied options, version trace, and `calculated_at`. Evaluation is capped at 200 candidates. When `candidate_limit_reached` is `true`, treat `count` as the count within the bounded candidate set rather than an unbounded event total. Successful responses use `Cache-Control: private, no-store` and vary by member context.
+
 The development deployment uses external HTTPS ingress. Swagger is available at `https://ca-olga-nlp-api-dev.agreeableocean-8bb4ca77.malaysiawest.azurecontainerapps.io/swagger`. External ingress exposes the entire API, not only Swagger; all endpoints remain unauthenticated during the temporary MVP phase.
 
 Swagger displays each applicable client header:
 
 | Header | Applies to | Client behavior |
 | --- | --- | --- |
-| `X-Member-Id` | Intent, match-request, search, and feedback operations | Optional only because the MVP falls back to `Mvp__DefaultMemberId`; maximum 64 characters. Replace this selector with a validated JWT identity before production use. |
+| `X-Member-Id` | Intent, match-request, live-count, search, and feedback operations | Optional only because the MVP falls back to `Mvp__DefaultMemberId`; maximum 64 characters. Replace this selector with a validated JWT identity before production use. |
 | `Idempotency-Key` | Stateful `POST` operations | Required, maximum 128 characters. Generate a UUID for each new logical action and reuse it for retries. For match requests and the legacy search endpoint, it must equal `request_id`. |
 | `If-Match` | `POST /v1/intents` | Send the ETag returned by `GET /v1/intents/{intentId}` when updating an existing intent; omit it only when creating the intent. |
 
