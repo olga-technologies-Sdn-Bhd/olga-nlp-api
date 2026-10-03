@@ -63,6 +63,11 @@ public interface IMatchingService
     Task<PairScore> ScorePairAsync(ScorePairRequest request, CancellationToken ct);
 }
 
+public interface ILiveMatchCountService
+{
+    Task<LiveMatchCountResponse> CountAsync(string requesterId, string eventId, string intentId, double threshold, bool requireReciprocal, CancellationToken ct);
+}
+
 public interface IFeedbackService
 {
     Task<FeedbackResponse> SaveAsync(long matchResultId, string requesterId, FeedbackCreateRequest request, CancellationToken ct);

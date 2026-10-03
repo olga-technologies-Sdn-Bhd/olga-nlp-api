@@ -68,6 +68,7 @@ All endpoints are anonymous for the initial MVP. Member-scoped endpoints use the
 - `GET /v1/intents/{intentId}`
 - `POST /v1/match-requests`
 - `GET /v1/match-requests/{requestId}`
+- `GET /v1/events/{eventId}/live-match-count?intent_id={intentId}&threshold={0..1}` - count currently eligible live members above the requested score (for example, `0.70` means 70%)
 - `POST /v1/matches/{matchResultId}/feedback`
 - `POST /v1/matches/search` - compatibility endpoint
 - `POST /v1/feedback` - compatibility endpoint

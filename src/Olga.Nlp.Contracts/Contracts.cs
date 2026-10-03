@@ -25,6 +25,19 @@ public sealed record MatchResponse(
     double? SemanticScore = null,
     double? ReciprocalScore = null);
 
+public sealed record LiveMatchCountResponse(
+    string EventId,
+    string IntentId,
+    double Threshold,
+    bool RequireReciprocal,
+    int Count,
+    int CandidatesEvaluated,
+    bool CandidateLimitReached,
+    string ModelVersion,
+    string PreprocessingVersion,
+    string RankingVersion,
+    DateTimeOffset CalculatedAt);
+
 public sealed record IntentUpsertRequest(
     string IntentId,
     string ContextId,

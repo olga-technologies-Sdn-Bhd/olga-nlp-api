@@ -47,6 +47,27 @@ public sealed class MatchContractTests : IClassFixture<WebApplicationFactory<Pro
     }
 
     [Fact]
+    public async Task Live_match_count_is_available_for_event_filters_without_a_mutation_key()
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/v1/events/event-001/live-match-count?intent_id=a-want&threshold=0.35&require_reciprocal=true");
+
+        using var response = await client.SendAsync(request);
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<LiveMatchCountResponse>(Json);
+        Assert.NotNull(body);
+        Assert.Equal("event-001", body.EventId);
+        Assert.Equal("a-want", body.IntentId);
+        Assert.Equal(.35, body.Threshold);
+        Assert.True(body.RequireReciprocal);
+        Assert.True(body.Count > 0);
+        Assert.True(body.CandidatesEvaluated >= body.Count);
+        Assert.Contains("no-store", response.Headers.CacheControl!.ToString());
+    }
+
+    [Fact]
     public async Task OpenApi_server_resolves_against_the_https_browser_origin()
     {
         using var response = await client.GetAsync("/openapi/v1.json");
@@ -80,6 +101,10 @@ public sealed class MatchContractTests : IClassFixture<WebApplicationFactory<Pro
         var intentRead = Operation(document, "/v1/intents/{intentId}", "get");
         AssertHeader(intentRead, "X-Member-Id", required: false, maxLength: 64);
         AssertNoHeader(intentRead, "Idempotency-Key");
+
+        var liveCount = Operation(document, "/v1/events/{eventId}/live-match-count", "get");
+        AssertHeader(liveCount, "X-Member-Id", required: false, maxLength: 64);
+        AssertNoHeader(liveCount, "Idempotency-Key");
 
         var intentWrite = Operation(document, "/v1/intents", "post");
         AssertHeader(intentWrite, "X-Member-Id", required: false, maxLength: 64);

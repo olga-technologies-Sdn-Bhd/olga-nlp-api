@@ -188,6 +188,63 @@ public sealed class MatchingService(
     };
 }
 
+public sealed class LiveMatchCountService(
+    ICandidateRepository candidates,
+    IRankingConfigRepository rankingConfigs,
+    IReciprocalScorer scorer,
+    IMatchRanker ranker) : ILiveMatchCountService
+{
+    private const int CandidateLimit = 200;
+
+    public async Task<LiveMatchCountResponse> CountAsync(
+        string requesterId,
+        string eventId,
+        string intentId,
+        double threshold,
+        bool requireReciprocal,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(eventId) || eventId.Length > 64 ||
+            string.IsNullOrWhiteSpace(intentId) || intentId.Length > 64 ||
+            threshold is < 0 or > 1)
+            throw new ArgumentException("LIVE_MATCH_COUNT_REQUEST_INVALID");
+
+        var requester = await candidates.GetRequesterIntentsAsync(requesterId, intentId, eventId, ct)
+            ?? throw new DomainNotFoundException("REQUESTER_INTENT_NOT_READY");
+        var requesterWant = requester.Want?.Embedding
+            ?? throw new DomainNotFoundException("REQUESTER_WANT_NOT_READY");
+        var modelVersion = requester.Want.ModelVersion
+            ?? throw new DomainNotFoundException("REQUESTER_MODEL_NOT_READY");
+        var pool = await candidates.GetEligibleCandidatesAsync(requesterId, eventId, modelVersion, CandidateLimit, ct);
+
+        var scored = pool
+            .Where(candidate => !requireReciprocal || candidate.Want?.Embedding is not null && requester.Offer?.Embedding is not null)
+            .Select(candidate =>
+            {
+                var candidateOffer = candidate.Offer.Embedding
+                    ?? throw new DomainNotFoundException("CANDIDATE_EMBEDDING_NOT_READY");
+                return (candidate, scorer.Score(requesterWant, candidateOffer, candidate.Want?.Embedding, requester.Offer?.Embedding));
+            })
+            .ToArray();
+
+        var config = (await rankingConfigs.GetActiveAsync(ct)) with { Threshold = threshold };
+        var count = ranker.Rank(requester, scored, config, CandidateLimit).Count;
+
+        return new LiveMatchCountResponse(
+            eventId,
+            intentId,
+            threshold,
+            requireReciprocal,
+            count,
+            pool.Count,
+            pool.Count == CandidateLimit,
+            modelVersion,
+            requester.Want.PreprocessingVersion,
+            config.Version,
+            DateTimeOffset.UtcNow);
+    }
+}
+
 public sealed class FeedbackService(IFeedbackRepository feedback, IPiiChecker pii) : IFeedbackService
 {
     private static readonly HashSet<string> Labels = new(StringComparer.OrdinalIgnoreCase) { "USEFUL", "NOT_USEFUL", "INAPPROPRIATE" };
