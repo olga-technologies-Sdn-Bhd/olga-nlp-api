@@ -13,7 +13,8 @@ public sealed class IntentService(IIntentRepository intents, ITextNormalizer nor
     public async Task<IntentResponse> SaveAsync(string memberId, IntentUpsertRequest request, string? expectedETag, CancellationToken ct)
     {
         if (!Enum.TryParse<IntentType>(request.IntentType, true, out var type)) throw new ArgumentException("INTENT_TYPE_INVALID");
-        if (string.IsNullOrWhiteSpace(request.IntentId) || string.IsNullOrWhiteSpace(request.ContextId)) throw new ArgumentException("INTENT_IDENTITY_INVALID");
+        if (string.IsNullOrWhiteSpace(request.IntentId) || request.IntentId.Length > 64 ||
+            string.IsNullOrWhiteSpace(request.ContextId)) throw new ArgumentException("INTENT_IDENTITY_INVALID");
         if (request.ExpiresAt <= DateTimeOffset.UtcNow) throw new ArgumentException("INTENT_EXPIRY_INVALID");
 
         var normalized = normalizer.Normalize(request.Text, request.Language);

@@ -109,6 +109,23 @@ public sealed class MatchContractTests : IClassFixture<WebApplicationFactory<Pro
     }
 
     [Fact]
+    public async Task Intent_write_rejects_an_oversized_intent_id()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/intents")
+        {
+            Content = JsonContent.Create(new IntentUpsertRequest(
+                new string('x', 65), "event-001", "OFFER", "x", DateTimeOffset.UtcNow.AddDays(1)), options: Json)
+        };
+        request.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+        using var body = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+        Assert.Equal("INTENT_IDENTITY_INVALID", body.RootElement.GetProperty("code").GetString());
+    }
+
+    [Fact]
     public async Task Api_is_callable_without_a_service_credential()
     {
         using var response = await client.PostAsJsonAsync("/v1/normalize", new NormalizeRequest("hello", null));
