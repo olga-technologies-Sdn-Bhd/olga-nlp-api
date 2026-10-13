@@ -57,6 +57,20 @@ Caller -> POST /v1/match-requests + Idempotency-Key
 
 In the integrated database, `nlp.vw_member_context_eligibility` and `nlp.vw_member_relationship` must be read-only projections derived from Core-owned IAM, consent, event, social, and moderation state. Stand-alone local tables are test fixtures behind the same repository interface, not production authorities.
 
+## Live match count flow
+
+```text
+Filter client -> GET /v1/events/{eventId}/live-match-count
+  -> bind the caller's active MATCH_READY WANT by intent_id and event context
+  -> reuse the match-search eligibility projection and suppression rules
+  -> score at most 200 candidates with the active ranking configuration
+  -> apply the caller threshold and optional reciprocal requirement
+  -> exclude candidates without an approved deterministic explanation
+  -> return an aggregate count, evaluated count, cap signal, and version trace
+```
+
+This endpoint is a personalized, read-only projection; it does not persist a match request or results and does not require an idempotency key. A `candidate_limit_reached` value of `true` means the count is bounded to the evaluated candidate set and is not an unbounded event total. Responses are `private, no-store`, vary by member context, and never expose candidate identities, vectors, presence cells/timestamps, relationship direction, or policy internals. Production ingress must authenticate and authorize the caller and rate-limit repeated aggregate queries because even counts can reveal sensitive event activity.
+
 ## Feedback and evaluation flow
 
 Feedback is attached to a persisted match result owned by the authenticated requester. Labels are controlled (`USEFUL`, `NOT_USEFUL`, `INAPPROPRIATE`). Corrections append a row that references the immediately superseded feedback; history is never overwritten. Free text is bounded and rejected when contact-style PII is detected.

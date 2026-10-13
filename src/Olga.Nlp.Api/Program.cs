@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.OpenApi;
 using Npgsql;
 using Olga.Nlp.Api;
@@ -108,6 +109,7 @@ builder.Services.AddScoped<IFeedbackRepository, FeedbackRepository>();
 builder.Services.AddScoped<IEvaluationRepository, EvaluationRepository>();
 builder.Services.AddScoped<IIntentService, IntentService>();
 builder.Services.AddScoped<IMatchingService, MatchingService>();
+builder.Services.AddScoped<ILiveMatchCountService, LiveMatchCountService>();
 builder.Services.AddScoped<IFeedbackService, FeedbackService>();
 builder.Services.AddScoped<IEvaluationService, EvaluationService>();
 
@@ -231,6 +233,25 @@ memberV1.MapGet("/match-requests/{requestId}", async (HttpContext context, strin
     return response is null ? await ErrorResult(context, 404, "MATCH_REQUEST_NOT_FOUND") : Results.Ok(response);
 });
 
+memberV1.MapGet("/events/{eventId}/live-match-count", async (
+    HttpContext context,
+    string eventId,
+    [FromQuery(Name = "intent_id")] string? intentId,
+    [FromQuery] double? threshold,
+    [FromQuery(Name = "require_reciprocal")] bool? requireReciprocal,
+    ILiveMatchCountService service,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(intentId) || threshold is null)
+        return await ErrorResult(context, 400, "LIVE_MATCH_COUNT_REQUEST_INVALID");
+
+    var memberId = Member(context, defaultMemberId);
+    var response = await service.CountAsync(memberId, eventId, intentId, threshold.Value, requireReciprocal ?? false, ct);
+    context.Response.Headers.CacheControl = "private, no-store";
+    context.Response.Headers.Vary = memberIdHeader;
+    return Results.Ok(response);
+});
+
 memberV1.MapPost("/matches/{matchResultId:long}/feedback", async (HttpContext context, long matchResultId, FeedbackCreateRequest request, IFeedbackService service, CancellationToken ct) =>
 {
     var memberId = Member(context, defaultMemberId);
@@ -339,6 +360,7 @@ static string SafeMessage(string code) => code switch
     "INTENT_NOT_FOUND" => "The requested intent was not found.",
     "MATCH_REQUEST_NOT_FOUND" => "The requested match execution was not found.",
     "MATCH_RESULT_NOT_FOUND" => "The requested match result was not found.",
+    "LIVE_MATCH_COUNT_REQUEST_INVALID" => "Event ID, intent ID, and a threshold from 0 to 1 are required.",
     "FEEDBACK_PII_DETECTED" => "Feedback text must not contain contact information.",
     "EVALUATION_RUN_NOT_FOUND" => "The requested evaluation run was not found.",
     "EVALUATION_DATASET_NOT_APPROVED" => "The evaluation dataset is not approved.",

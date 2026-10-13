@@ -410,6 +410,9 @@ public sealed class MatchRequestRepository(NlpDbContext db) : IMatchRequestRepos
     public async Task CompleteAsync(string requestId, string preprocessingVersion, string modelVersion, string rankingVersion, double threshold, int candidateCount, CancellationToken ct)
     {
         var row = await db.MatchRequests.SingleAsync(x => x.RequestId == requestId, ct);
+        // save_match_results updates this row directly and advances its trigger-managed row_version.
+        if (db.Database.IsRelational())
+            await db.Entry(row).ReloadAsync(ct);
         row.Status = "COMPLETED";
         row.PreprocessingVersion = preprocessingVersion;
         row.ModelVersion = modelVersion;
