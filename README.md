@@ -127,4 +127,7 @@ Evaluation runs are anonymous during the initial MVP. They still read only `APPR
 - Keep intent text, vectors, identity values, presence, provider payloads, and feedback text out of telemetry.
 - Use private endpoints, Key Vault, Application Insights/OpenTelemetry, retry/dead-letter monitoring, and the approved retention/privacy workflows.
 
-The database migrations are intentionally maintained separately. They must implement the v2.3 `nlp` tables and approved projections represented by the EF mappings in this repository.
+Database DDL and migrations are intentionally maintained in the separate database repository. The
+current deployment baseline is schema v2.6; its `nlp` tables, controlled functions, and approved
+Core projections must remain compatible with the EF mappings and parameterized Npgsql operations in
+this repository. The v2.5 and v2.6 migrations change Core profile-image and outbox state only.
