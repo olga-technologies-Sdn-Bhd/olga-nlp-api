@@ -22,6 +22,12 @@ public interface IIntentRepository
     Task<Intent> MarkReadyAsync(string intentId, string normalizedText, string normalizedHash, float[] embedding, string modelVersion, string preprocessingVersion, CancellationToken ct);
 }
 
+public interface IVentureIntentSetRepository
+{
+    Task BeginAsync(string memberId, VentureIntentSetUpsertRequest request, CancellationToken ct);
+    Task BindIntentAsync(string memberId, string intentSetId, string intentId, CancellationToken ct);
+}
+
 public interface ICandidateRepository
 {
     Task<MemberIntents?> GetRequesterIntentsAsync(string memberId, string requestedIntentId, string contextId, CancellationToken ct);
@@ -54,6 +60,11 @@ public interface IIntentService
 {
     Task<IntentResponse> SaveAsync(string memberId, IntentUpsertRequest request, string? expectedETag, CancellationToken ct);
     Task<IntentDetailResponse?> GetAsync(string memberId, string intentId, CancellationToken ct);
+}
+
+public interface IVentureIntentSetService
+{
+    Task<VentureIntentSetResponse> SaveAsync(string memberId, VentureIntentSetUpsertRequest request, CancellationToken ct);
 }
 
 public interface IMatchingService

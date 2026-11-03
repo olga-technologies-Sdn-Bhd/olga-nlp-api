@@ -101,6 +101,7 @@ builder.Services.AddSingleton<IReciprocalScorer, ReciprocalScorer>();
 builder.Services.AddSingleton<IExplanationGenerator, ExplanationGenerator>();
 builder.Services.AddSingleton<IMatchRanker, MatchRanker>();
 builder.Services.AddScoped<IIntentRepository, IntentRepository>();
+if (!useInMemory) builder.Services.AddScoped<IVentureIntentSetRepository, VentureIntentSetRepository>();
 builder.Services.AddScoped<ICandidateRepository, CandidateRepository>();
 builder.Services.AddScoped<IRankingConfigRepository, RankingConfigRepository>();
 builder.Services.AddScoped<IMatchRequestRepository, MatchRequestRepository>();
@@ -108,6 +109,7 @@ builder.Services.AddScoped<IMatchResultRepository, MatchResultRepository>();
 builder.Services.AddScoped<IFeedbackRepository, FeedbackRepository>();
 builder.Services.AddScoped<IEvaluationRepository, EvaluationRepository>();
 builder.Services.AddScoped<IIntentService, IntentService>();
+if (!useInMemory) builder.Services.AddScoped<IVentureIntentSetService, VentureIntentSetService>();
 builder.Services.AddScoped<IMatchingService, MatchingService>();
 builder.Services.AddScoped<ILiveMatchCountService, LiveMatchCountService>();
 builder.Services.AddScoped<IFeedbackService, FeedbackService>();
@@ -194,6 +196,14 @@ memberV1.MapPost("/intents", async (HttpContext context, IntentUpsertRequest req
     if (!string.IsNullOrWhiteSpace(response.ETag)) context.Response.Headers.ETag = response.ETag;
     return response.Status == "PROCESSING" ? Results.Accepted($"/v1/intents/{response.IntentId}", response) : Results.Ok(response);
 }).WithMetadata(new IfMatchMetadata());
+
+memberV1.MapPost("/venture-intent-sets", async (HttpContext context, VentureIntentSetUpsertRequest request, IVentureIntentSetService service, CancellationToken ct) =>
+{
+    var idempotencyKey = context.Request.Headers[idempotencyKeyHeader].ToString();
+    if (!string.Equals(request.IntentSetId, idempotencyKey, StringComparison.Ordinal)) return await ErrorResult(context, 409, "IDEMPOTENCY_KEY_MISMATCH");
+    var response = await service.SaveAsync(Member(context, defaultMemberId), request, ct);
+    return Results.Accepted($"/v1/venture-intent-sets/{response.IntentSetId}", response);
+});
 
 memberV1.MapGet("/intents/{intentId}", async (HttpContext context, string intentId, IIntentService service, CancellationToken ct) =>
 {
