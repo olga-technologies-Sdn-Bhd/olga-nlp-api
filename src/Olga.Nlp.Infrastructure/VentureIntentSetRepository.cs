@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Npgsql;
 using NpgsqlTypes;
 using Olga.Nlp.Application;
@@ -5,6 +6,35 @@ using Olga.Nlp.Contracts;
 using Olga.Nlp.Domain;
 
 namespace Olga.Nlp.Infrastructure;
+
+public sealed class InMemoryVentureIntentSetRepository : IVentureIntentSetRepository
+{
+    private readonly ConcurrentDictionary<string, SetState> sets = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string> intentSets = new(StringComparer.Ordinal);
+
+    public Task BeginAsync(string memberId, VentureIntentSetUpsertRequest request, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var state = new SetState(memberId, request.VentureId, request.OfferIntentId, request.WantIntentId);
+        var stored = sets.GetOrAdd(request.IntentSetId, state);
+        if (stored != state)
+            throw new DomainConflictException("VENTURE_INTENT_SET_CONFLICT");
+        return Task.CompletedTask;
+    }
+
+    public Task BindIntentAsync(string memberId, string intentSetId, string intentId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!sets.TryGetValue(intentSetId, out var state)
+            || !string.Equals(state.MemberId, memberId, StringComparison.Ordinal)
+            || intentId != state.OfferIntentId && intentId != state.WantIntentId
+            || !string.Equals(intentSets.GetOrAdd(intentId, intentSetId), intentSetId, StringComparison.Ordinal))
+            throw new DomainConflictException("VENTURE_INTENT_BIND_FAILED");
+        return Task.CompletedTask;
+    }
+
+    private sealed record SetState(string MemberId, string VentureId, string OfferIntentId, string WantIntentId);
+}
 
 public sealed class VentureIntentSetRepository(NpgsqlDataSource dataSource) : IVentureIntentSetRepository
 {

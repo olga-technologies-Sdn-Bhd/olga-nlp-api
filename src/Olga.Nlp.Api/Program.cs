@@ -101,7 +101,8 @@ builder.Services.AddSingleton<IReciprocalScorer, ReciprocalScorer>();
 builder.Services.AddSingleton<IExplanationGenerator, ExplanationGenerator>();
 builder.Services.AddSingleton<IMatchRanker, MatchRanker>();
 builder.Services.AddScoped<IIntentRepository, IntentRepository>();
-if (!useInMemory) builder.Services.AddScoped<IVentureIntentSetRepository, VentureIntentSetRepository>();
+if (useInMemory) builder.Services.AddSingleton<IVentureIntentSetRepository, InMemoryVentureIntentSetRepository>();
+else builder.Services.AddScoped<IVentureIntentSetRepository, VentureIntentSetRepository>();
 builder.Services.AddScoped<ICandidateRepository, CandidateRepository>();
 builder.Services.AddScoped<IRankingConfigRepository, RankingConfigRepository>();
 builder.Services.AddScoped<IMatchRequestRepository, MatchRequestRepository>();
@@ -109,7 +110,7 @@ builder.Services.AddScoped<IMatchResultRepository, MatchResultRepository>();
 builder.Services.AddScoped<IFeedbackRepository, FeedbackRepository>();
 builder.Services.AddScoped<IEvaluationRepository, EvaluationRepository>();
 builder.Services.AddScoped<IIntentService, IntentService>();
-if (!useInMemory) builder.Services.AddScoped<IVentureIntentSetService, VentureIntentSetService>();
+builder.Services.AddScoped<IVentureIntentSetService, VentureIntentSetService>();
 builder.Services.AddScoped<IMatchingService, MatchingService>();
 builder.Services.AddScoped<ILiveMatchCountService, LiveMatchCountService>();
 builder.Services.AddScoped<IFeedbackService, FeedbackService>();
@@ -307,6 +308,7 @@ static bool IsStateMutation(HttpRequest request) => request.Method == "POST" && 
 
 static bool IsStateMutationPath(PathString path) =>
     path.StartsWithSegments("/v1/intents") ||
+    path.StartsWithSegments("/v1/venture-intent-sets") ||
     path.StartsWithSegments("/v1/match-requests") ||
     path.StartsWithSegments("/v1/matches/search") ||
     path.StartsWithSegments("/v1/feedback") ||
