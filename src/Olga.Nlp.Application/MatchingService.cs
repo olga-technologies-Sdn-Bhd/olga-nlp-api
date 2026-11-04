@@ -51,7 +51,7 @@ public sealed class IntentService(IIntentRepository intents, ITextNormalizer nor
             value.Category, value.Industry, value.Geography, value.CreatedAt, value.UpdatedAt, value.ETag);
     }
 
-    internal static string ToStorageStatus(IntentStatus status) => status switch
+    private static string ToStorageStatus(IntentStatus status) => status switch
     {
         IntentStatus.MatchReady => "MATCH_READY",
         IntentStatus.Processing => "PROCESSING",
@@ -79,8 +79,8 @@ public sealed class VentureIntentSetService(IVentureIntentSetRepository sets, II
         var storedOffer = await intents.GetAsync(memberId, request.OfferIntentId, ct) ?? throw new InvalidOperationException("VENTURE_OFFER_INTENT_MISSING");
         var storedWant = await intents.GetAsync(memberId, request.WantIntentId, ct) ?? throw new InvalidOperationException("VENTURE_WANT_INTENT_MISSING");
         return new(request.IntentSetId, request.VentureId,
-            new(storedOffer.IntentId, IntentService.ToStorageStatus(storedOffer.Status), storedOffer.ModelVersion ?? string.Empty, storedOffer.PreprocessingVersion, storedOffer.NormalizedHash, storedOffer.LanguageCode, storedOffer.ContainsPii, storedOffer.UpdatedAt, storedOffer.ETag),
-            new(storedWant.IntentId, IntentService.ToStorageStatus(storedWant.Status), storedWant.ModelVersion ?? string.Empty, storedWant.PreprocessingVersion, storedWant.NormalizedHash, storedWant.LanguageCode, storedWant.ContainsPii, storedWant.UpdatedAt, storedWant.ETag));
+            new(storedOffer.IntentId, storedOffer.Status, storedOffer.ModelVersion ?? string.Empty, storedOffer.PreprocessingVersion, storedOffer.NormalizedHash, storedOffer.Language, storedOffer.ContainsPii, storedOffer.UpdatedAt, storedOffer.ETag),
+            new(storedWant.IntentId, storedWant.Status, storedWant.ModelVersion ?? string.Empty, storedWant.PreprocessingVersion, storedWant.NormalizedHash, storedWant.Language, storedWant.ContainsPii, storedWant.UpdatedAt, storedWant.ETag));
     }
 }
 
