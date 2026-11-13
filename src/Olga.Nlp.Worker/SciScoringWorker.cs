@@ -15,6 +15,8 @@ public sealed class SciScoringWorker(NpgsqlDataSource dataSource, ILogger<SciSco
     private const double NeutralTaxonomyScore = 0.5d;
     private static readonly TimeSpan IdleDelay = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan FailureDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ConfigurationHealthCheckInterval = TimeSpan.FromMinutes(5);
+    private DateTimeOffset _nextConfigurationHealthCheckAt = DateTimeOffset.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -23,7 +25,12 @@ public sealed class SciScoringWorker(NpgsqlDataSource dataSource, ILogger<SciSco
             try
             {
                 var job = await TryLeaseAsync(stoppingToken);
-                if (job is null) { await Task.Delay(IdleDelay, stoppingToken); continue; }
+                if (job is null)
+                {
+                    await LogBlockedQueueAsync(stoppingToken);
+                    await Task.Delay(IdleDelay, stoppingToken);
+                    continue;
+                }
                 await ProcessAsync(job, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
@@ -53,6 +60,7 @@ public sealed class SciScoringWorker(NpgsqlDataSource dataSource, ILogger<SciSco
                         AND (c.effective_to IS NULL OR c.effective_to > CURRENT_TIMESTAMP)
                         AND k.status='ACTIVE' AND k.effective_from <= CURRENT_TIMESTAMP
                         AND (k.effective_to IS NULL OR k.effective_to > CURRENT_TIMESTAMP)
+                        AND k.f50 IS NOT NULL AND k.f99 IS NOT NULL AND k.f99 > k.f50
                   )
                 ORDER BY j.available_at, j.sci_scoring_job_pk
                 LIMIT 1 FOR UPDATE SKIP LOCKED
@@ -69,6 +77,35 @@ public sealed class SciScoringWorker(NpgsqlDataSource dataSource, ILogger<SciSco
             if (await reader.ReadAsync(ct)) result = new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3), reader.GetInt64(4), reader.GetInt32(5), reader.GetInt32(6));
         await transaction.CommitAsync(ct);
         return result;
+    }
+
+    private async Task LogBlockedQueueAsync(CancellationToken ct)
+    {
+        var checkedAt = DateTimeOffset.UtcNow;
+        if (checkedAt < _nextConfigurationHealthCheckAt) return;
+        _nextConfigurationHealthCheckAt = checkedAt.Add(ConfigurationHealthCheckInterval);
+
+        await using var command = dataSource.CreateCommand("""
+            SELECT
+              EXISTS (
+                SELECT 1 FROM nlp.sci_scoring_job
+                WHERE status IN ('PENDING','FAILED','RUNNING')
+                  AND available_at <= CURRENT_TIMESTAMP
+                  AND (locked_until IS NULL OR locked_until < CURRENT_TIMESTAMP)
+              ),
+              EXISTS (
+                SELECT 1 FROM nlp.sci_scoring_config c
+                JOIN nlp.sci_calibration k ON k.sci_scoring_config_pk=c.sci_scoring_config_pk
+                WHERE c.status='ACTIVE' AND c.effective_from <= CURRENT_TIMESTAMP
+                  AND (c.effective_to IS NULL OR c.effective_to > CURRENT_TIMESTAMP)
+                  AND k.status='ACTIVE' AND k.effective_from <= CURRENT_TIMESTAMP
+                  AND (k.effective_to IS NULL OR k.effective_to > CURRENT_TIMESTAMP)
+                  AND k.f50 IS NOT NULL AND k.f99 IS NOT NULL AND k.f99 > k.f50
+              )
+            """);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        if (await reader.ReadAsync(ct) && reader.GetBoolean(0) && !reader.GetBoolean(1))
+            logger.LogError("SCI scoring queue is blocked: no active, in-window calibration with valid f50/f99 is available");
     }
 
     private async Task ProcessAsync(SciJob job, CancellationToken ct)
