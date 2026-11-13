@@ -49,6 +49,22 @@ public sealed record IntentUpsertRequest(
     string? Geography = null,
     string? Language = null);
 
+public sealed record VentureIntentSetUpsertRequest(
+    string IntentSetId,
+    string VentureId,
+    string OfferIntentId,
+    string WantIntentId,
+    string OfferText,
+    string WantText,
+    DateTimeOffset ExpiresAt,
+    System.Text.Json.JsonElement StructuredIntent,
+    string? Category = null,
+    string? Industry = null,
+    string? Geography = null,
+    string? Language = null);
+
+public sealed record VentureIntentSetResponse(string IntentSetId, string VentureId, IntentResponse Offer, IntentResponse Want);
+
 public sealed record IntentResponse(
     string IntentId,
     string Status,
