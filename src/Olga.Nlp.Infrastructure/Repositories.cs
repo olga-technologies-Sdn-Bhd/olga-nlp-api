@@ -87,6 +87,35 @@ public sealed class IntentRepository(NlpDbContext db) : IIntentRepository
         stored.CreatedAt = DateTimeOffset.UtcNow;
         AddOutboxEvent(db, "INTENT", intentId, "NlpIntentMatchReady.v1", new { intent_id = intentId, member_id = row.MemberId, context_id = row.ContextId, intent_type = row.IntentType, status = row.Status, model_version = modelVersion, preprocessing_version = preprocessingVersion });
         await db.SaveChangesAsync(ct);
+        if (db.Database.IsRelational())
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                WITH activated AS (
+                    UPDATE nlp.venture_intent_set vis
+                       SET status='ACTIVE', updated_at=CURRENT_TIMESTAMP
+                     WHERE vis.venture_intent_set_pk=(SELECT venture_intent_set_pk FROM nlp.nlp_intent WHERE intent_id={0})
+                       AND vis.status='PROCESSING'
+                       AND 2=(SELECT count(DISTINCT i.intent_type) FROM nlp.nlp_intent i
+                              WHERE i.venture_intent_set_pk=vis.venture_intent_set_pk AND i.intent_type IN ('OFFER','WANT')
+                                AND i.status='MATCH_READY' AND i.expires_at>CURRENT_TIMESTAMP)
+                    RETURNING vis.venture_intent_set_pk, vis.owner_member_id, vis.venture_pk, vis.intent_set_id
+                ), superseded AS (
+                    UPDATE nlp.venture_intent_set previous
+                       SET status='SUPERSEDED', updated_at=CURRENT_TIMESTAMP
+                      FROM activated a
+                     WHERE previous.venture_pk=a.venture_pk
+                       AND previous.venture_intent_set_pk<>a.venture_intent_set_pk
+                       AND previous.status='ACTIVE'
+                    RETURNING previous.venture_intent_set_pk
+                )
+                SELECT nlp.enqueue_sci_scoring_job(
+                    'sci_' || substr(md5(a.intent_set_id),1,32), a.owner_member_id, v.venture_id, a.owner_member_id,
+                    'OWNER_INTENT_READY', 'intent-ready:' || a.intent_set_id, CURRENT_TIMESTAMP)
+                FROM activated a
+                JOIN core.venture v ON v.venture_pk=a.venture_pk
+                CROSS JOIN (SELECT count(*) FROM superseded) completed
+                """, [intentId], ct);
+        }
         return await MapAsync(row, stored, ct) ?? throw new InvalidOperationException("INTENT_MAPPING_FAILED");
     }
 

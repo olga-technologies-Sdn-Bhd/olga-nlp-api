@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
 using Olga.Nlp.Application;
 using Olga.Nlp.Infrastructure;
+using Olga.Nlp.Worker;
 using Pgvector.EntityFrameworkCore;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -39,6 +40,7 @@ builder.Services.AddScoped<IIntentRepository, IntentRepository>();
 builder.Services.AddScoped<EmbeddingJobProcessor>();
 builder.Services.AddHostedService<AzureEmbeddingModelValidator>();
 builder.Services.AddHostedService<EmbeddingJobWorker>();
+builder.Services.AddHostedService<SciScoringWorker>();
 await builder.Build().RunAsync();
 
 public sealed class EmbeddingJobWorker(IServiceScopeFactory scopes, ILogger<EmbeddingJobWorker> logger) : BackgroundService

@@ -60,6 +60,30 @@ public sealed class IntentService(IIntentRepository intents, ITextNormalizer nor
     };
 }
 
+public sealed class VentureIntentSetService(IVentureIntentSetRepository sets, IIntentService intents) : IVentureIntentSetService
+{
+    public async Task<VentureIntentSetResponse> SaveAsync(string memberId, VentureIntentSetUpsertRequest request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.IntentSetId) || request.IntentSetId.Length > 64
+            || string.IsNullOrWhiteSpace(request.VentureId) || request.VentureId.Length > 64
+            || request.OfferIntentId == request.WantIntentId || request.ExpiresAt <= DateTimeOffset.UtcNow
+            || request.StructuredIntent.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+            throw new ArgumentException("VENTURE_INTENT_SET_INVALID");
+        await sets.BeginAsync(memberId, request, ct);
+        var currentOffer = await intents.GetAsync(memberId, request.OfferIntentId, ct);
+        await intents.SaveAsync(memberId, new(request.OfferIntentId, request.VentureId, "OFFER", request.OfferText, request.ExpiresAt, request.Category, request.Industry, request.Geography, request.Language), currentOffer?.ETag, ct);
+        await sets.BindIntentAsync(memberId, request.IntentSetId, request.OfferIntentId, ct);
+        var currentWant = await intents.GetAsync(memberId, request.WantIntentId, ct);
+        await intents.SaveAsync(memberId, new(request.WantIntentId, request.VentureId, "WANT", request.WantText, request.ExpiresAt, request.Category, request.Industry, request.Geography, request.Language), currentWant?.ETag, ct);
+        await sets.BindIntentAsync(memberId, request.IntentSetId, request.WantIntentId, ct);
+        var storedOffer = await intents.GetAsync(memberId, request.OfferIntentId, ct) ?? throw new InvalidOperationException("VENTURE_OFFER_INTENT_MISSING");
+        var storedWant = await intents.GetAsync(memberId, request.WantIntentId, ct) ?? throw new InvalidOperationException("VENTURE_WANT_INTENT_MISSING");
+        return new(request.IntentSetId, request.VentureId,
+            new(storedOffer.IntentId, storedOffer.Status, storedOffer.ModelVersion ?? string.Empty, storedOffer.PreprocessingVersion, storedOffer.NormalizedHash, storedOffer.Language, storedOffer.ContainsPii, storedOffer.UpdatedAt, storedOffer.ETag),
+            new(storedWant.IntentId, storedWant.Status, storedWant.ModelVersion ?? string.Empty, storedWant.PreprocessingVersion, storedWant.NormalizedHash, storedWant.Language, storedWant.ContainsPii, storedWant.UpdatedAt, storedWant.ETag));
+    }
+}
+
 public sealed class MatchingService(
     ICandidateRepository candidates,
     IMatchRequestRepository requests,
