@@ -190,6 +190,11 @@ app.MapGet("/ready", async (NlpDbContext db, CancellationToken ct) =>
 
 var memberV1 = app.MapGroup("/v1").WithMetadata(new MemberContextMetadata());
 
+memberV1.MapPost("/primary-intents/preview", (PrimaryIntentPreviewRequest request, IVentureIntentSetService service) =>
+    Results.Ok(service.Preview(request)));
+memberV1.MapGet("/primary-intents/history", async (HttpContext context, string? cursor, int? limit, IVentureIntentSetService service, CancellationToken ct) =>
+    Results.Ok(await service.ListHistoryAsync(Member(context, defaultMemberId), cursor, limit ?? 50, ct)));
+
 memberV1.MapPost("/intents", async (HttpContext context, IntentUpsertRequest request, IIntentService service, CancellationToken ct) =>
 {
     var memberId = Member(context, defaultMemberId);

@@ -40,6 +40,7 @@ builder.Services.AddScoped<IIntentRepository, IntentRepository>();
 builder.Services.AddScoped<EmbeddingJobProcessor>();
 builder.Services.AddHostedService<AzureEmbeddingModelValidator>();
 builder.Services.AddHostedService<EmbeddingJobWorker>();
+builder.Services.AddHostedService<MemberGeneralProfileEmbeddingWorker>();
 builder.Services.AddHostedService<SciScoringWorker>();
 await builder.Build().RunAsync();
 

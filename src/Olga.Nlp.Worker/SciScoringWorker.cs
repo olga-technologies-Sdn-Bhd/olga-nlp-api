@@ -1,5 +1,7 @@
 using System.Data;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
@@ -11,8 +13,6 @@ public sealed class SciScoringWorker(NpgsqlDataSource dataSource, ILogger<SciSco
 {
     private const int BatchSize = 200;
     private const int MaxAttempts = 5;
-    private const double RecencyWindowDays = 90d;
-    private const double NeutralTaxonomyScore = 0.5d;
     private static readonly TimeSpan IdleDelay = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan FailureDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan ConfigurationHealthCheckInterval = TimeSpan.FromMinutes(5);
@@ -36,7 +36,7 @@ public sealed class SciScoringWorker(NpgsqlDataSource dataSource, ILogger<SciSco
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
             catch (Exception exception)
             {
-                logger.LogError(exception, "SCI scoring cycle failed");
+                logger.LogError(exception, "SCI v2 scoring cycle failed");
                 await Task.Delay(FailureDelay, stoppingToken);
             }
         }
@@ -55,12 +55,9 @@ public sealed class SciScoringWorker(NpgsqlDataSource dataSource, ILogger<SciSco
                   AND (j.locked_until IS NULL OR j.locked_until < CURRENT_TIMESTAMP)
                   AND EXISTS (
                       SELECT 1 FROM nlp.sci_scoring_config c
-                      JOIN nlp.sci_calibration k ON k.sci_scoring_config_pk=c.sci_scoring_config_pk
-                      WHERE c.status='ACTIVE' AND c.effective_from <= CURRENT_TIMESTAMP
+                      WHERE c.scoring_config_id='SCI_GLOBAL_V2' AND c.status='ACTIVE'
+                        AND c.effective_from <= CURRENT_TIMESTAMP
                         AND (c.effective_to IS NULL OR c.effective_to > CURRENT_TIMESTAMP)
-                        AND k.status='ACTIVE' AND k.effective_from <= CURRENT_TIMESTAMP
-                        AND (k.effective_to IS NULL OR k.effective_to > CURRENT_TIMESTAMP)
-                        AND k.f50 IS NOT NULL AND k.f99 IS NOT NULL AND k.f99 > k.f50
                   )
                 ORDER BY j.available_at, j.sci_scoring_job_pk
                 LIMIT 1 FOR UPDATE SKIP LOCKED
@@ -68,13 +65,13 @@ public sealed class SciScoringWorker(NpgsqlDataSource dataSource, ILogger<SciSco
             UPDATE nlp.sci_scoring_job j
                SET status='RUNNING', locked_until=CURRENT_TIMESTAMP + interval '2 minutes',
                    attempt_count=attempt_count + 1, error_code=NULL, updated_at=CURRENT_TIMESTAMP
-              FROM next_job n, core.venture v
-             WHERE j.sci_scoring_job_pk=n.sci_scoring_job_pk AND v.venture_pk=j.venture_pk
-            RETURNING j.job_id, j.owner_member_id, v.venture_id, j.venture_pk, j.after_link_pk, j.processed_count, j.attempt_count
+              FROM next_job n
+             WHERE j.sci_scoring_job_pk=n.sci_scoring_job_pk
+            RETURNING j.job_id, j.owner_member_id, j.venture_pk, j.after_link_pk, j.processed_count, j.attempt_count
             """, connection, transaction);
         SciJob? result = null;
         await using (var reader = await command.ExecuteReaderAsync(ct))
-            if (await reader.ReadAsync(ct)) result = new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3), reader.GetInt64(4), reader.GetInt32(5), reader.GetInt32(6));
+            if (await reader.ReadAsync(ct)) result = new(reader.GetString(0), reader.GetString(1), reader.GetInt64(2), reader.GetInt64(3), reader.GetInt32(4), reader.GetInt32(5));
         await transaction.CommitAsync(ct);
         return result;
     }
@@ -86,26 +83,19 @@ public sealed class SciScoringWorker(NpgsqlDataSource dataSource, ILogger<SciSco
         _nextConfigurationHealthCheckAt = checkedAt.Add(ConfigurationHealthCheckInterval);
 
         await using var command = dataSource.CreateCommand("""
-            SELECT
-              EXISTS (
-                SELECT 1 FROM nlp.sci_scoring_job
-                WHERE status IN ('PENDING','FAILED','RUNNING')
-                  AND available_at <= CURRENT_TIMESTAMP
-                  AND (locked_until IS NULL OR locked_until < CURRENT_TIMESTAMP)
-              ),
-              EXISTS (
-                SELECT 1 FROM nlp.sci_scoring_config c
-                JOIN nlp.sci_calibration k ON k.sci_scoring_config_pk=c.sci_scoring_config_pk
-                WHERE c.status='ACTIVE' AND c.effective_from <= CURRENT_TIMESTAMP
-                  AND (c.effective_to IS NULL OR c.effective_to > CURRENT_TIMESTAMP)
-                  AND k.status='ACTIVE' AND k.effective_from <= CURRENT_TIMESTAMP
-                  AND (k.effective_to IS NULL OR k.effective_to > CURRENT_TIMESTAMP)
-                  AND k.f50 IS NOT NULL AND k.f99 IS NOT NULL AND k.f99 > k.f50
-              )
+            SELECT EXISTS (
+                       SELECT 1 FROM nlp.sci_scoring_job
+                       WHERE status IN ('PENDING','FAILED','RUNNING') AND available_at <= CURRENT_TIMESTAMP
+                         AND (locked_until IS NULL OR locked_until < CURRENT_TIMESTAMP)),
+                   EXISTS (
+                       SELECT 1 FROM nlp.sci_scoring_config
+                       WHERE scoring_config_id='SCI_GLOBAL_V2' AND status='ACTIVE'
+                         AND effective_from <= CURRENT_TIMESTAMP
+                         AND (effective_to IS NULL OR effective_to > CURRENT_TIMESTAMP))
             """);
         await using var reader = await command.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct) && reader.GetBoolean(0) && !reader.GetBoolean(1))
-            logger.LogError("SCI scoring queue is blocked: no active, in-window calibration with valid f50/f99 is available");
+            logger.LogError("SCI scoring queue is blocked: approved SCI_GLOBAL_V2 is not active");
     }
 
     private async Task ProcessAsync(SciJob job, CancellationToken ct)
@@ -114,80 +104,102 @@ public sealed class SciScoringWorker(NpgsqlDataSource dataSource, ILogger<SciSco
         {
             var config = await ReadConfigurationAsync(ct);
             var candidates = await ReadCandidatesAsync(job, ct);
-            foreach (var candidate in candidates)
+            foreach (var candidate in candidates.Where(x => x.ForwardDistance is not null))
             {
-                var clientSemantic = Math.Clamp(1d - candidate.ClientDistance, 0d, 1d);
-                var supplierSemantic = Math.Clamp(1d - candidate.SupplierDistance, 0d, 1d);
-                var semantic = Math.Max(clientSemantic, supplierSemantic);
-                var role = clientSemantic >= supplierSemantic ? "CLIENT" : "SUPPLIER";
-                var recency = Math.Clamp((candidate.ValidUntil - DateTimeOffset.UtcNow).TotalDays / RecencyWindowDays, 0d, 1d);
-                var taxonomy = NeutralTaxonomyScore; // Neutral until the reviewed taxonomy mapper is configured.
-                var raw = Math.Clamp(semantic * config.SemanticWeight + taxonomy * config.TaxonomyWeight + recency * config.RecencyWeight, 0d, 1d);
-                var score = Calibrate(raw, config.F50, config.F99);
-                var (competitor, qualified) = ReadFlags(candidate.StructuredIntentJson);
-                await ApplyAsync(job, candidate, config, raw, score, role, competitor, qualified, ct);
+                var forward = NormalizeSimilarity(candidate.ForwardDistance!.Value, config.CosineFloor, config.CosineSpan);
+                var reverse = candidate.ReverseDistance is null ? (double?)null : NormalizeSimilarity(candidate.ReverseDistance.Value, config.CosineFloor, config.CosineSpan);
+                var semantic = reverse is null ? forward : Math.Max(forward, reverse.Value);
+                var complementarity = reverse is null ? forward : (forward + reverse.Value) / 2d;
+                var recency = Recency(candidate, config, DateTimeOffset.UtcNow);
+                await ApplyAsync(job, candidate, config, semantic, complementarity, recency, ct);
             }
 
             var more = candidates.Count == BatchSize;
             var nextPk = candidates.Count == 0 ? job.AfterLinkPk : candidates[^1].ContactLinkPk;
-            await UpdateJobAsync(job, more ? "PENDING" : "SUCCEEDED", nextPk, job.ProcessedCount + candidates.Count, null, more ? DateTimeOffset.UtcNow : null, ct);
+            if (more)
+                await UpdateJobAsync(job, "PENDING", nextPk, job.ProcessedCount + candidates.Count, null, DateTimeOffset.UtcNow, ct);
+            else
+                await CompleteJobAsync(job, nextPk, job.ProcessedCount + candidates.Count, config, ct);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             var dead = job.AttemptCount >= MaxAttempts;
-            await UpdateJobAsync(job, dead ? "DEAD" : "FAILED", job.AfterLinkPk, job.ProcessedCount, ErrorCode(exception), dead ? null : DateTimeOffset.UtcNow.AddSeconds(Math.Min(300, 10 * Math.Pow(2, job.AttemptCount - 1))), ct);
-            logger.LogWarning(exception, "SCI job {JobId} failed on attempt {AttemptCount}", job.JobId, job.AttemptCount);
+            await UpdateJobAsync(job, dead ? "DEAD" : "FAILED", job.AfterLinkPk, job.ProcessedCount, ErrorCode(exception),
+                dead ? null : DateTimeOffset.UtcNow.AddSeconds(Math.Min(300, 10 * Math.Pow(2, job.AttemptCount - 1))), ct);
+            logger.LogWarning(exception, "SCI v2 job {JobId} failed on attempt {AttemptCount}", job.JobId, job.AttemptCount);
         }
     }
 
     private async Task<SciConfiguration> ReadConfigurationAsync(CancellationToken ct)
     {
         await using var command = dataSource.CreateCommand("""
-            SELECT c.scoring_config_id, c.scorer_version, c.semantic_weight, c.taxonomy_weight, c.recency_weight, k.f50, k.f99
-            FROM nlp.sci_scoring_config c
-            JOIN nlp.sci_calibration k ON k.sci_scoring_config_pk=c.sci_scoring_config_pk
-            WHERE c.status='ACTIVE' AND c.effective_from <= CURRENT_TIMESTAMP AND (c.effective_to IS NULL OR c.effective_to > CURRENT_TIMESTAMP)
-              AND k.status='ACTIVE' AND k.effective_from <= CURRENT_TIMESTAMP AND (k.effective_to IS NULL OR k.effective_to > CURRENT_TIMESTAMP)
-              AND k.f50 IS NOT NULL AND k.f99 IS NOT NULL AND k.f99 > k.f50
-            ORDER BY c.effective_from DESC, k.effective_from DESC LIMIT 1
+            SELECT scoring_config_id, scorer_version, cosine_floor, cosine_span,
+                   recency_full_days, recency_decay_days, estimated_recency
+            FROM nlp.sci_scoring_config
+            WHERE scoring_config_id='SCI_GLOBAL_V2' AND status='ACTIVE'
+              AND effective_from <= CURRENT_TIMESTAMP AND (effective_to IS NULL OR effective_to > CURRENT_TIMESTAMP)
+            LIMIT 1
             """);
         await using var reader = await command.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("SCI_ACTIVE_CALIBRATION_MISSING");
-        return new(reader.GetString(0), reader.GetString(1), Convert.ToDouble(reader.GetValue(2), CultureInfo.InvariantCulture),
-            Convert.ToDouble(reader.GetValue(3), CultureInfo.InvariantCulture), Convert.ToDouble(reader.GetValue(4), CultureInfo.InvariantCulture),
-            Convert.ToDouble(reader.GetValue(5), CultureInfo.InvariantCulture), Convert.ToDouble(reader.GetValue(6), CultureInfo.InvariantCulture));
+        if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("SCI_V2_ACTIVE_CONFIGURATION_MISSING");
+        return new(reader.GetString(0), reader.GetString(1), Double(reader, 2), Double(reader, 3),
+            reader.GetInt16(4), reader.GetInt16(5), Double(reader, 6));
     }
 
     private async Task<List<SciCandidate>> ReadCandidatesAsync(SciJob job, CancellationToken ct)
     {
-        await using var command = dataSource.CreateCommand("SELECT * FROM nlp.get_sci_scoring_candidates(@owner_member_id,@venture_id,@after_link_pk,@max_rows)");
-        Add(command, "owner_member_id", job.OwnerMemberId); Add(command, "venture_id", job.VentureId);
-        command.Parameters.AddWithValue("after_link_pk", job.AfterLinkPk); command.Parameters.AddWithValue("max_rows", BatchSize);
+        await using var command = dataSource.CreateCommand("SELECT * FROM nlp.get_sci_v2_scoring_candidates(@owner_member_id,@after_link_pk,@max_rows)");
+        Add(command, "owner_member_id", job.OwnerMemberId);
+        command.Parameters.AddWithValue("after_link_pk", job.AfterLinkPk);
+        command.Parameters.AddWithValue("max_rows", BatchSize);
         var rows = new List<SciCandidate>();
         await using var reader = await command.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct)) rows.Add(new(
-            reader.GetInt64(0), reader.GetInt64(3), reader.GetInt64(4), reader.GetInt64(5), reader.GetInt64(7),
-            reader.GetDouble(12), reader.GetDouble(13), reader.GetString(14), reader.GetFieldValue<DateTimeOffset>(15), reader.GetString(16), reader.GetString(17)));
+        while (await reader.ReadAsync(ct))
+            rows.Add(new(
+                reader.GetInt64(0), reader.GetString(1), NullableString(reader, 2), reader.GetString(3),
+                reader.GetInt64(4), reader.GetInt64(5), reader.IsDBNull(6) ? null : reader.GetInt64(6),
+                reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetDouble(9), reader.IsDBNull(10) ? null : reader.GetDouble(10),
+                reader.GetBoolean(11), reader.IsDBNull(12) ? null : reader.GetFieldValue<DateTimeOffset>(12),
+                reader.GetString(13), reader.GetString(14)));
         return rows;
     }
 
-    private async Task ApplyAsync(SciJob job, SciCandidate candidate, SciConfiguration config, double raw, double score, string role, bool competitor, bool qualified, CancellationToken ct)
+    private async Task ApplyAsync(SciJob job, SciCandidate candidate, SciConfiguration config, double semantic, double complementarity, double recency, CancellationToken ct)
     {
         var stableKey = $"{job.JobId}:{candidate.ContactLinkPk}";
+        var explanation = JsonSerializer.Serialize(new
+        {
+            algorithm = "SCI_V2",
+            lifecycle = candidate.LifecycleState,
+            semantic_component = semantic,
+            complementarity_component = complementarity,
+            recency_component = recency,
+            estimated = candidate.IsEstimated
+        });
         await using var command = dataSource.CreateCommand("""
-            SELECT * FROM nlp.apply_sci_link_score(
-              @score_id,@contact_link_pk,@venture_pk,@contact_venture_pk,@owner_intent_set_pk,@contact_intent_set_pk,
-              @scoring_config_id,@raw_fit,@calibrated_score,@relationship_role,@competitor_overlay,@qualification_met,
-              @model_version,@preprocessing_version,@scorer_version,@scored_at,@outbox_event_id)
+            SELECT * FROM nlp.apply_sci_link_score_v2(
+              @score_run_id,@contact_link_pk,@venture_pk,@owner_intent_set_pk,@contact_intent_set_pk,
+              @scoring_config_id,@semantic_component,@complementarity_component,@recency_component,
+              @is_estimated,@explanation_json,@model_version,@preprocessing_version,@scorer_version,
+              @cause_event_id,@scored_at,true)
             """);
-        Add(command, "score_id", StableId("score", stableKey)); command.Parameters.AddWithValue("contact_link_pk", candidate.ContactLinkPk);
-        command.Parameters.AddWithValue("venture_pk", candidate.OwnerVenturePk); command.Parameters.AddWithValue("contact_venture_pk", candidate.ContactVenturePk);
-        command.Parameters.AddWithValue("owner_intent_set_pk", candidate.OwnerIntentSetPk); command.Parameters.AddWithValue("contact_intent_set_pk", candidate.ContactIntentSetPk);
-        Add(command, "scoring_config_id", config.Id); command.Parameters.Add("raw_fit", NpgsqlDbType.Numeric).Value = (decimal)raw;
-        command.Parameters.Add("calibrated_score", NpgsqlDbType.Numeric).Value = (decimal)score; Add(command, "relationship_role", role);
-        command.Parameters.AddWithValue("competitor_overlay", competitor); command.Parameters.AddWithValue("qualification_met", qualified);
-        Add(command, "model_version", candidate.ModelVersion); Add(command, "preprocessing_version", candidate.PreprocessingVersion); Add(command, "scorer_version", config.ScorerVersion);
-        command.Parameters.AddWithValue("scored_at", DateTimeOffset.UtcNow); Add(command, "outbox_event_id", StableId("sci", stableKey));
+        Add(command, "score_run_id", StableId("run", stableKey));
+        command.Parameters.AddWithValue("contact_link_pk", candidate.ContactLinkPk);
+        command.Parameters.AddWithValue("venture_pk", candidate.OwnerVenturePk);
+        command.Parameters.AddWithValue("owner_intent_set_pk", candidate.OwnerIntentSetPk);
+        command.Parameters.Add("contact_intent_set_pk", NpgsqlDbType.Bigint).Value = candidate.ContactIntentSetPk is null ? DBNull.Value : candidate.ContactIntentSetPk.Value;
+        Add(command, "scoring_config_id", config.Id);
+        command.Parameters.Add("semantic_component", NpgsqlDbType.Numeric).Value = (decimal)semantic;
+        command.Parameters.Add("complementarity_component", NpgsqlDbType.Numeric).Value = (decimal)complementarity;
+        command.Parameters.Add("recency_component", NpgsqlDbType.Numeric).Value = (decimal)recency;
+        command.Parameters.AddWithValue("is_estimated", candidate.IsEstimated);
+        command.Parameters.Add("explanation_json", NpgsqlDbType.Jsonb).Value = explanation;
+        Add(command, "model_version", candidate.ModelVersion);
+        Add(command, "preprocessing_version", candidate.PreprocessingVersion);
+        Add(command, "scorer_version", config.ScorerVersion);
+        Add(command, "cause_event_id", job.JobId);
+        command.Parameters.AddWithValue("scored_at", DateTimeOffset.UtcNow);
         await command.ExecuteNonQueryAsync(ct);
     }
 
@@ -199,42 +211,67 @@ public sealed class SciScoringWorker(NpgsqlDataSource dataSource, ILogger<SciSco
               locked_until=NULL, error_code=@error_code, available_at=COALESCE(@available_at,available_at), updated_at=CURRENT_TIMESTAMP
             WHERE job_id=@job_id
             """);
-        Add(command, "status", status); command.Parameters.AddWithValue("after_link_pk", afterPk); command.Parameters.AddWithValue("processed_count", processed);
-        Add(command, "error_code", error); command.Parameters.Add("available_at", NpgsqlDbType.TimestampTz).Value = availableAt is null ? DBNull.Value : availableAt.Value; Add(command, "job_id", job.JobId);
+        Add(command, "status", status);
+        command.Parameters.AddWithValue("after_link_pk", afterPk);
+        command.Parameters.AddWithValue("processed_count", processed);
+        Add(command, "error_code", error);
+        command.Parameters.Add("available_at", NpgsqlDbType.TimestampTz).Value = availableAt is null ? DBNull.Value : availableAt.Value;
+        Add(command, "job_id", job.JobId);
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    private static double Calibrate(double raw, double f50, double f99) => raw <= f50
-        ? Math.Clamp(raw / Math.Max(f50, 0.000001d) * 50d, 0d, 50d)
-        : Math.Clamp(50d + ((raw - f50) / (f99 - f50) * 49d), 50d, 100d);
-
-    private static (bool Competitor, bool Qualified) ReadFlags(string json)
+    private async Task CompleteJobAsync(SciJob job,long afterPk,int processed,SciConfiguration config,CancellationToken ct)
     {
-        try
-        {
-            using var document = JsonDocument.Parse(json);
-            var root = document.RootElement;
-            var competitor = root.TryGetProperty("competitor", out var competitorValue)
-                && competitorValue.ValueKind == JsonValueKind.True;
-            var qualified = !root.TryGetProperty("qualification_met", out var qualificationValue)
-                || qualificationValue.ValueKind != JsonValueKind.False;
-            return (competitor, qualified);
-        }
-        catch (JsonException)
-        {
-            // Malformed structured intent fails closed and receives the qualification cap.
-            return (false, false);
-        }
+        await using var command=dataSource.CreateCommand("""
+            WITH completed AS (
+              UPDATE nlp.sci_scoring_job SET status='SUCCEEDED',after_link_pk=@after_link_pk,
+                processed_count=@processed_count,error_code=NULL,locked_until=NULL,updated_at=CURRENT_TIMESTAMP
+              WHERE job_id=@job_id
+              RETURNING job_id,owner_member_id,venture_pk,processed_count
+            )
+            INSERT INTO ops.outbox_event(outbox_event_id,aggregate_type,aggregate_id,event_type,payload_json)
+            SELECT 'sci_done_'||substr(md5(job_id),1,32),'SCI_MEMBER',owner_member_id,'SciScoringCompleted.v1',
+              jsonb_build_object('job_id',job_id,'owner_member_id',owner_member_id,'venture_pk',venture_pk,
+                'processed_count',processed_count,'scorer_version',@scorer_version,'scoring_config_id',@scoring_config_id)
+            FROM completed ON CONFLICT(outbox_event_id) DO NOTHING
+            """);
+        command.Parameters.AddWithValue("after_link_pk",afterPk);command.Parameters.AddWithValue("processed_count",processed);
+        Add(command,"job_id",job.JobId);Add(command,"scorer_version",config.ScorerVersion);Add(command,"scoring_config_id",config.Id);
+        await command.ExecuteNonQueryAsync(ct);
     }
-    private static string StableId(string prefix, string value) => $"{prefix}_{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant()[..32]}";
+
+    private static double NormalizeSimilarity(double cosineDistance, double floor, double span) =>
+        Math.Clamp(((1d - cosineDistance) - floor) / span, 0d, 1d);
+
+    private static double Recency(SciCandidate candidate, SciConfiguration config, DateTimeOffset now)
+    {
+        if (candidate.IsEstimated) return config.EstimatedRecency;
+        if (candidate.ContactIntentUpdatedAt is null) return 0d;
+        var age = Math.Max(0d, (now - candidate.ContactIntentUpdatedAt.Value).TotalDays);
+        if (age <= config.RecencyFullDays) return 1d;
+        if (age >= config.RecencyDecayDays) return 0d;
+        return 1d - ((age - config.RecencyFullDays) / (config.RecencyDecayDays - config.RecencyFullDays));
+    }
+
+    private static string StableId(string prefix, string value) =>
+        $"{prefix}_{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant()[..32]}";
+
     private static string ErrorCode(Exception exception)
     {
         var value = (exception is PostgresException postgres ? $"PG_{postgres.SqlState}" : exception.Message).Replace(' ', '_');
         return string.IsNullOrWhiteSpace(value) ? "SCI_SCORING_FAILED" : value[..Math.Min(64, value.Length)];
     }
+
+    private static double Double(NpgsqlDataReader reader, int ordinal) => Convert.ToDouble(reader.GetValue(ordinal), CultureInfo.InvariantCulture);
+    private static string? NullableString(NpgsqlDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
     private static void Add(NpgsqlCommand command, string name, string? value) => command.Parameters.Add(name, NpgsqlDbType.Varchar).Value = value is null ? DBNull.Value : value;
 
-    private sealed record SciJob(string JobId, string OwnerMemberId, string VentureId, long VenturePk, long AfterLinkPk, int ProcessedCount, int AttemptCount);
-    private sealed record SciConfiguration(string Id, string ScorerVersion, double SemanticWeight, double TaxonomyWeight, double RecencyWeight, double F50, double F99);
-    private sealed record SciCandidate(long ContactLinkPk, long OwnerVenturePk, long OwnerIntentSetPk, long ContactVenturePk, long ContactIntentSetPk, double ClientDistance, double SupplierDistance, string StructuredIntentJson, DateTimeOffset ValidUntil, string ModelVersion, string PreprocessingVersion);
+    private sealed record SciJob(string JobId, string OwnerMemberId, long VenturePk, long AfterLinkPk, int ProcessedCount, int AttemptCount);
+    private sealed record SciConfiguration(string Id, string ScorerVersion, double CosineFloor, double CosineSpan, short RecencyFullDays, short RecencyDecayDays, double EstimatedRecency);
+    private sealed record SciCandidate(
+        long ContactLinkPk, string LinkId, string? ContactMemberId, string LifecycleState,
+        long OwnerVenturePk, long OwnerIntentSetPk, long? ContactIntentSetPk,
+        string OwnerStructuredIntentJson, string? ContactStructuredIntentJson,
+        double? ForwardDistance, double? ReverseDistance, bool IsEstimated,
+        DateTimeOffset? ContactIntentUpdatedAt, string ModelVersion, string PreprocessingVersion);
 }

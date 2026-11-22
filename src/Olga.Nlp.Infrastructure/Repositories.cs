@@ -107,13 +107,45 @@ public sealed class IntentRepository(NlpDbContext db) : IIntentRepository
                        AND previous.venture_intent_set_pk<>a.venture_intent_set_pk
                        AND previous.status='ACTIVE'
                     RETURNING previous.venture_intent_set_pk
+                ), state_changed AS (
+                    INSERT INTO social.sci_member_state (
+                        state_id, owner_member_id, primary_venture_pk, primary_intent_set_pk,
+                        projection_status, current_projection_version, projection_started_at)
+                    SELECT 'state_' || substr(md5(a.owner_member_id),1,32), a.owner_member_id,
+                           a.venture_pk, a.venture_intent_set_pk, 'RECALCULATING', 1, CURRENT_TIMESTAMP
+                    FROM activated a
+                    ON CONFLICT (owner_member_id) DO UPDATE SET
+                        primary_venture_pk=EXCLUDED.primary_venture_pk,
+                        primary_intent_set_pk=EXCLUDED.primary_intent_set_pk,
+                        projection_status='RECALCULATING',
+                        current_projection_version=social.sci_member_state.current_projection_version + 1,
+                        projection_started_at=CURRENT_TIMESTAMP,
+                        projection_completed_at=NULL,
+                        projection_error_code=NULL,
+                        updated_at=CURRENT_TIMESTAMP
+                    RETURNING owner_member_id, current_projection_version
+                ), published AS (
+                    INSERT INTO ops.outbox_event (
+                        outbox_event_id, aggregate_type, aggregate_id, event_type, payload_json, occurred_at)
+                    SELECT 'intent_' || substr(md5(a.intent_set_id),1,32), 'SCI_INTENT', a.intent_set_id,
+                           'SciPrimaryIntentChanged.v1',
+                           jsonb_build_object(
+                               'owner_member_id', a.owner_member_id,
+                               'intent_set_id', a.intent_set_id,
+                               'projection_version', s.current_projection_version),
+                           CURRENT_TIMESTAMP
+                    FROM activated a JOIN state_changed s ON s.owner_member_id=a.owner_member_id
+                    ON CONFLICT (outbox_event_id) DO NOTHING
+                    RETURNING aggregate_id
                 )
                 SELECT nlp.enqueue_sci_scoring_job(
                     'sci_' || substr(md5(a.intent_set_id),1,32), a.owner_member_id, v.venture_id, a.owner_member_id,
                     'OWNER_INTENT_READY', 'intent-ready:' || a.intent_set_id, CURRENT_TIMESTAMP)
                 FROM activated a
                 JOIN core.venture v ON v.venture_pk=a.venture_pk
+                JOIN state_changed s ON s.owner_member_id=a.owner_member_id
                 CROSS JOIN (SELECT count(*) FROM superseded) completed
+                CROSS JOIN (SELECT count(*) FROM published) emitted
                 """, [intentId], ct);
         }
         return await MapAsync(row, stored, ct) ?? throw new InvalidOperationException("INTENT_MAPPING_FAILED");

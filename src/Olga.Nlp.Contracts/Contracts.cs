@@ -61,9 +61,35 @@ public sealed record VentureIntentSetUpsertRequest(
     string? Category = null,
     string? Industry = null,
     string? Geography = null,
-    string? Language = null);
+    string? Language = null,
+    IReadOnlyList<string>? Tags = null,
+    string? TagFingerprint = null,
+    DateTimeOffset? PreviewedAt = null);
 
-public sealed record VentureIntentSetResponse(string IntentSetId, string VentureId, IntentResponse Offer, IntentResponse Want);
+public sealed record PrimaryIntentPreviewRequest(string OfferText, string WantText, IReadOnlyList<string> Tags);
+public sealed record PrimaryIntentPreviewResponse(
+    IReadOnlyList<string> CanonicalTags,
+    string TagFingerprint,
+    DateTimeOffset PreviewedAt,
+    string PreviewText);
+public sealed record PrimaryIntentHistoryItem(
+    string IntentSetId,
+    string VentureId,
+    int IntentVersion,
+    string Status,
+    string? TagFingerprint,
+    DateTimeOffset? PreviewedAt,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt);
+public sealed record PrimaryIntentHistoryPage(IReadOnlyList<PrimaryIntentHistoryItem> Items, string? NextCursor);
+
+public sealed record VentureIntentSetResponse(
+    string IntentSetId,
+    string VentureId,
+    IntentResponse Offer,
+    IntentResponse Want,
+    string TagFingerprint,
+    string ProjectionStatus = "RECALCULATING");
 
 public sealed record IntentResponse(
     string IntentId,

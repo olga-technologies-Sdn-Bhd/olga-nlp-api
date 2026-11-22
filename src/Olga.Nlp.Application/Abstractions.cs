@@ -26,6 +26,7 @@ public interface IVentureIntentSetRepository
 {
     Task BeginAsync(string memberId, VentureIntentSetUpsertRequest request, CancellationToken ct);
     Task BindIntentAsync(string memberId, string intentSetId, string intentId, CancellationToken ct);
+    Task<PrimaryIntentHistoryPage> ListHistoryAsync(string memberId, string? cursor, int limit, CancellationToken ct);
 }
 
 public interface ICandidateRepository
@@ -64,7 +65,9 @@ public interface IIntentService
 
 public interface IVentureIntentSetService
 {
+    PrimaryIntentPreviewResponse Preview(PrimaryIntentPreviewRequest request);
     Task<VentureIntentSetResponse> SaveAsync(string memberId, VentureIntentSetUpsertRequest request, CancellationToken ct);
+    Task<PrimaryIntentHistoryPage> ListHistoryAsync(string memberId, string? cursor, int limit, CancellationToken ct);
 }
 
 public interface IMatchingService

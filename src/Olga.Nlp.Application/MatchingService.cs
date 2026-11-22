@@ -62,13 +62,38 @@ public sealed class IntentService(IIntentRepository intents, ITextNormalizer nor
 
 public sealed class VentureIntentSetService(IVentureIntentSetRepository sets, IIntentService intents) : IVentureIntentSetService
 {
+    public Task<PrimaryIntentHistoryPage> ListHistoryAsync(string memberId, string? cursor, int limit, CancellationToken ct)
+    {
+        if (limit is < 1 or > 100) throw new ArgumentException("PRIMARY_INTENT_HISTORY_QUERY_INVALID");
+        return sets.ListHistoryAsync(memberId, cursor, limit, ct);
+    }
+
+    public PrimaryIntentPreviewResponse Preview(PrimaryIntentPreviewRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.OfferText) || string.IsNullOrWhiteSpace(request.WantText)
+            || request.OfferText.Length>4000 || request.WantText.Length>4000 || request.Tags is null)
+            throw new ArgumentException("PRIMARY_INTENT_TEXT_REQUIRED");
+        var canonicalTags = CanonicalTags(request.Tags);
+        var fingerprint = Fingerprint(canonicalTags);
+        return new(canonicalTags, fingerprint, DateTimeOffset.UtcNow,
+            $"You offer: {request.OfferText.Trim()}\nYou want: {request.WantText.Trim()}\nTags: {string.Join(", ", canonicalTags)}");
+    }
+
     public async Task<VentureIntentSetResponse> SaveAsync(string memberId, VentureIntentSetUpsertRequest request, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.IntentSetId) || request.IntentSetId.Length > 64
             || string.IsNullOrWhiteSpace(request.VentureId) || request.VentureId.Length > 64
+            || string.IsNullOrWhiteSpace(request.OfferText) || request.OfferText.Length>4000
+            || string.IsNullOrWhiteSpace(request.WantText) || request.WantText.Length>4000
             || request.OfferIntentId == request.WantIntentId || request.ExpiresAt <= DateTimeOffset.UtcNow
             || request.StructuredIntent.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
             throw new ArgumentException("VENTURE_INTENT_SET_INVALID");
+        var canonicalTags = CanonicalTags(request.Tags ?? []);
+        var fingerprint = Fingerprint(canonicalTags);
+        if (!string.Equals(request.TagFingerprint, fingerprint, StringComparison.Ordinal)
+            || request.PreviewedAt is null || request.PreviewedAt > DateTimeOffset.UtcNow.AddMinutes(1))
+            throw new ArgumentException("PRIMARY_INTENT_PREVIEW_REQUIRED");
+        request = request with { Tags = canonicalTags, TagFingerprint = fingerprint };
         await sets.BeginAsync(memberId, request, ct);
         var currentOffer = await intents.GetAsync(memberId, request.OfferIntentId, ct);
         await intents.SaveAsync(memberId, new(request.OfferIntentId, request.VentureId, "OFFER", request.OfferText, request.ExpiresAt, request.Category, request.Industry, request.Geography, request.Language), currentOffer?.ETag, ct);
@@ -80,8 +105,21 @@ public sealed class VentureIntentSetService(IVentureIntentSetRepository sets, II
         var storedWant = await intents.GetAsync(memberId, request.WantIntentId, ct) ?? throw new InvalidOperationException("VENTURE_WANT_INTENT_MISSING");
         return new(request.IntentSetId, request.VentureId,
             new(storedOffer.IntentId, storedOffer.Status, storedOffer.ModelVersion ?? string.Empty, storedOffer.PreprocessingVersion, storedOffer.NormalizedHash, storedOffer.Language, storedOffer.ContainsPii, storedOffer.UpdatedAt, storedOffer.ETag),
-            new(storedWant.IntentId, storedWant.Status, storedWant.ModelVersion ?? string.Empty, storedWant.PreprocessingVersion, storedWant.NormalizedHash, storedWant.Language, storedWant.ContainsPii, storedWant.UpdatedAt, storedWant.ETag));
+            new(storedWant.IntentId, storedWant.Status, storedWant.ModelVersion ?? string.Empty, storedWant.PreprocessingVersion, storedWant.NormalizedHash, storedWant.Language, storedWant.ContainsPii, storedWant.UpdatedAt, storedWant.ETag),
+            fingerprint);
     }
+
+    private static IReadOnlyList<string> CanonicalTags(IReadOnlyList<string> tags)
+    {
+        var canonical = tags.Select(x => x.Trim().ToLowerInvariant()).Where(x => x.Length > 0)
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        if (canonical.Length is < 1 or > 50 || canonical.Any(x => x.Length > 64))
+            throw new ArgumentException("PRIMARY_INTENT_TAGS_INVALID");
+        return canonical;
+    }
+
+    private static string Fingerprint(IReadOnlyList<string> tags) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', tags)))).ToLowerInvariant();
 }
 
 public sealed class MatchingService(
